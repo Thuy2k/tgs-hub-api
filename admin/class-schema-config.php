@@ -73,15 +73,17 @@ class TGS_Hub_Schema_Config {
                 </table>
 
                 <h2 style="margin-top: 30px;">Bảng LOCAL (riêng từng shop)</h2>
+                <p><em>Shop có thể PULL về (từ blog multisite đã kết nối) và PUSH lên (từ shop về hub)</em></p>
                 <table class="widefat">
                     <thead>
                         <tr>
-                            <th style="width: 50px;">
-                                <input type="checkbox" id="check-all-local-pull" />
-                            </th>
                             <th>Tên bảng</th>
                             <th>Mô tả</th>
-                            <th style="width: 100px; text-align: center;">
+                            <th style="width: 120px; text-align: center;">
+                                Cho phép PULL
+                                <br><input type="checkbox" id="check-all-local-pull" style="margin-top: 5px;" />
+                            </th>
+                            <th style="width: 120px; text-align: center;">
                                 Cho phép PUSH
                                 <br><input type="checkbox" id="check-all-local-push" style="margin-top: 5px;" />
                             </th>
@@ -91,13 +93,12 @@ class TGS_Hub_Schema_Config {
                         <?php
                         $local_tables = self::get_available_local_tables();
                         foreach ($local_tables as $table => $info) {
-                            $checked_pull = in_array($table, $config['local']) ? 'checked' : '';
+                            $checked_pull = in_array($table, $config['local_pull'] ?? array()) ? 'checked' : '';
                             $checked_push = in_array($table, $config['local_push'] ?? array()) ? 'checked' : '';
                             $disabled = !$info['has_sync_columns'] ? 'disabled' : '';
                             $row_class = !$info['has_sync_columns'] ? 'style="background-color: #ffe6e6;"' : '';
 
                             echo '<tr ' . $row_class . '>';
-                            echo '<td><input type="checkbox" name="local_tables[]" value="' . esc_attr($table) . '" ' . $checked_pull . ' ' . $disabled . ' /></td>';
                             echo '<td><code>' . esc_html($table) . '</code></td>';
                             echo '<td>' . esc_html($info['description']);
 
@@ -107,6 +108,7 @@ class TGS_Hub_Schema_Config {
                             }
 
                             echo '</td>';
+                            echo '<td style="text-align: center;"><input type="checkbox" name="local_pull_tables[]" value="' . esc_attr($table) . '" ' . $checked_pull . ' ' . $disabled . ' /></td>';
                             echo '<td style="text-align: center;"><input type="checkbox" name="local_push_tables[]" value="' . esc_attr($table) . '" ' . $checked_push . ' ' . $disabled . ' /></td>';
                             echo '</tr>';
                         }
@@ -128,7 +130,7 @@ class TGS_Hub_Schema_Config {
                 $('input[name="global_tables[]"]').prop('checked', this.checked);
             });
             $('#check-all-local-pull').on('change', function() {
-                $('input[name="local_tables[]"]').prop('checked', this.checked);
+                $('input[name="local_pull_tables[]"]').prop('checked', this.checked);
             });
             $('#check-all-local-push').on('change', function() {
                 $('input[name="local_push_tables[]"]').prop('checked', this.checked);
@@ -299,7 +301,7 @@ class TGS_Hub_Schema_Config {
                 'sql_global_selling_policy',
                 'sql_global_selling_policy_items',
             ),
-            'local' => array(
+            'local_pull' => array(
                 'sql_local_ledger_person',
                 'sql_local_ledger',
                 'sql_local_ledger_item',
@@ -323,7 +325,7 @@ class TGS_Hub_Schema_Config {
     private static function save_config($post_data) {
         $config = array(
             'global' => isset($post_data['global_tables']) ? array_map('sanitize_text_field', $post_data['global_tables']) : array(),
-            'local' => isset($post_data['local_tables']) ? array_map('sanitize_text_field', $post_data['local_tables']) : array(),
+            'local_pull' => isset($post_data['local_pull_tables']) ? array_map('sanitize_text_field', $post_data['local_pull_tables']) : array(),
             'local_push' => isset($post_data['local_push_tables']) ? array_map('sanitize_text_field', $post_data['local_push_tables']) : array(),
         );
 

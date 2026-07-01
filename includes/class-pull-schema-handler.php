@@ -37,14 +37,18 @@ class TGS_Hub_Pull_Schema_Handler {
         // Lấy dữ liệu GLOBAL cần pull về (incremental nếu có $since, paginated)
         $global_data = self::get_global_data($client['blog_id'], $since, $cursors);
 
+        // Lấy dữ liệu LOCAL từ blog multisite đã kết nối
+        $local_data = self::get_local_data($client['blog_id'], $since);
+
         return new WP_REST_Response(array(
             'success' => true,
             'data' => array(
                 'schema_version' => '1.0.0',
                 'sql_statements' => $sql_statements,
                 'global_data' => $global_data,
+                'local_data' => $local_data,
                 'server_time' => current_time('mysql', true), // Để Local update watermark
-                'instructions' => 'Execute SQL statements to create tables, then upsert global data',
+                'instructions' => 'Execute SQL statements to create tables, then upsert global and local data',
             ),
         ), 200);
     }
@@ -83,7 +87,7 @@ class TGS_Hub_Pull_Schema_Handler {
         }
 
         // 2. LOCAL tables - lấy từ bảng multisite blog đang kết nối
-        foreach ($config['local'] as $method_name) {
+        foreach ($config['local_pull'] ?? array() as $method_name) {
             // Extract tên bảng: sql_local_ledger -> local_ledger
             $base_table = str_replace('sql_', '', $method_name);
 
@@ -236,6 +240,92 @@ class TGS_Hub_Pull_Schema_Handler {
             'is_incremental' => !empty($since),
             'has_more' => $cat_result['has_more'] || $product_result['has_more'] ||
                           $policy_result['has_more'] || $lot_result['has_more'],
+        );
+
+        return $data;
+    }
+
+    /**
+     * Lấy dữ liệu LOCAL từ multisite blog đã kết nối
+     *
+     * @param int $blog_id Blog ID của shop đang kết nối
+     * @param string|null $since Timestamp cho incremental sync
+     * @return array Data từ các bảng LOCAL
+     */
+    private static function get_local_data($blog_id, $since = null) {
+        global $wpdb;
+
+        $data = array();
+        $limit = 500; // Batch size
+
+        // Lấy config bảng LOCAL nào được phép PULL
+        $config = TGS_Hub_Schema_Config::get_config();
+        $allowed_tables = $config['local_pull'] ?? array();
+
+        if (empty($allowed_tables)) {
+            return array(
+                'summary' => array(
+                    'total_records' => 0,
+                    'tables_pulled' => 0,
+                    'message' => 'No LOCAL tables configured for PULL',
+                ),
+            );
+        }
+
+        $total_records = 0;
+
+        // Lặp qua từng bảng LOCAL được phép pull
+        foreach ($allowed_tables as $method_name) {
+            // Extract tên bảng: sql_local_ledger -> local_ledger
+            $base_table = str_replace('sql_', '', $method_name);
+
+            // Tên bảng thực tế trong blog: wp_5_local_ledger
+            $blog_table = $wpdb->get_blog_prefix($blog_id) . $base_table;
+
+            // Check bảng tồn tại
+            $exists = $wpdb->get_var($wpdb->prepare("SHOW TABLES LIKE %s", $blog_table));
+            if (!$exists) {
+                continue;
+            }
+
+            // Lấy primary key
+            $pk = self::get_real_primary_key($blog_table, null);
+            if (!$pk) {
+                continue;
+            }
+
+            // Build WHERE clause cho incremental sync
+            $where_clause = '';
+            $prepare_args = array($limit);
+
+            if ($since) {
+                $where_clause = 'WHERE (updated_at > %s OR deleted_at > %s)';
+                $prepare_args = array($since, $since, $limit);
+            }
+
+            // Query data
+            $query = $wpdb->prepare(
+                "SELECT * FROM {$blog_table}
+                 {$where_clause}
+                 ORDER BY {$pk} DESC
+                 LIMIT %d",
+                ...$prepare_args
+            );
+
+            $results = $wpdb->get_results($query, ARRAY_A);
+
+            if (!empty($results)) {
+                $data[$base_table] = $results;
+                $total_records += count($results);
+            }
+        }
+
+        $data['summary'] = array(
+            'total_records' => $total_records,
+            'tables_pulled' => count($data) - 1, // -1 vì có 'summary'
+            'since' => $since,
+            'is_incremental' => !empty($since),
+            'blog_id' => $blog_id,
         );
 
         return $data;
