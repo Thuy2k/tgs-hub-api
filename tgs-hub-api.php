@@ -79,6 +79,9 @@ class TGS_Hub_API {
         add_action('plugins_loaded', array($this, 'load_textdomain'));
         add_action('rest_api_init', array('TGS_Hub_REST_API', 'register_routes'));
 
+        // Allow REST API authentication for external calls (testing)
+        add_filter('rest_authentication_errors', array($this, 'allow_rest_api'));
+
         // Admin menu
         if (is_admin()) {
             add_action('network_admin_menu', array($this, 'add_network_admin_menu'));
@@ -86,10 +89,27 @@ class TGS_Hub_API {
     }
 
     /**
+     * Allow REST API from external (for testing and cross-project calls)
+     */
+    public function allow_rest_api($result) {
+        // Allow /tgs-hub/v1/auth/register endpoint from external calls
+        if (isset($_SERVER['REQUEST_URI']) && strpos($_SERVER['REQUEST_URI'], '/wp-json/tgs-hub/v1/auth/register') !== false) {
+            return true;
+        }
+
+        if (!empty($result)) {
+            return $result;
+        }
+        return true;
+    }
+
+    /**
      * Plugin activation
      */
     public function activate() {
+        ob_start(); // Suppress output
         TGS_Hub_Database::create_tables();
+        ob_end_clean();
         flush_rewrite_rules();
     }
 

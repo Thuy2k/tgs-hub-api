@@ -27,13 +27,13 @@ class TGS_Hub_Auth_Handler {
         $table = $wpdb->base_prefix . TGS_HUB_TABLE_CLIENTS;
 
         $setup_token = $request->get_param('setup_token');
-        $store_name = $request->get_param('store_name');
+        $store_name = $request->get_param('store_name') ?: 'POS Client'; // Default name
         $device_info = $request->get_param('device_info');
 
-        if (empty($setup_token) || empty($store_name)) {
+        if (empty($setup_token)) {
             return new WP_Error(
                 'invalid_request',
-                'Missing setup_token or store_name',
+                'Missing setup_token',
                 array('status' => 400)
             );
         }

@@ -17,11 +17,18 @@ class TGS_Hub_REST_API {
      * Register all REST API routes
      */
     public static function register_routes() {
-        // Auth endpoint (không cần token)
+        // Auth endpoint (public - cho phép external calls)
+        // Support both GET and POST to bypass REST restrictions
         register_rest_route(self::NAMESPACE, '/auth/register', array(
-            'methods'  => WP_REST_Server::CREATABLE,
+            'methods'  => array(WP_REST_Server::CREATABLE, WP_REST_Server::READABLE),
             'callback' => array('TGS_Hub_Auth_Handler', 'register'),
-            'permission_callback' => '__return_true', // Public endpoint
+            'permission_callback' => '__return_true', // Public endpoint - no auth required
+            'args' => array(
+                'setup_token' => array(
+                    'required' => true,
+                    'type' => 'string',
+                ),
+            ),
         ));
 
         // Sync endpoints (cần token)

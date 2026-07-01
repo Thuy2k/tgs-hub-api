@@ -43,7 +43,7 @@ class TGS_Hub_Database {
         return "CREATE TABLE {$table} (
             id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
             blog_id INT UNSIGNED NOT NULL UNIQUE COMMENT 'ID site trên Multisite',
-            client_token VARCHAR(64) NOT NULL UNIQUE COMMENT 'Token xác thực',
+            client_token VARCHAR(64) DEFAULT NULL COMMENT 'Token xác thực (NULL nếu chưa đăng ký)',
             client_name VARCHAR(255) NOT NULL COMMENT 'Tên cửa hàng',
             store_id VARCHAR(64) DEFAULT NULL COMMENT 'Mã cửa hàng (VD: store_pt_001)',
             branch_name VARCHAR(255) DEFAULT NULL COMMENT 'Chi nhánh (VD: Phú Thọ)',
