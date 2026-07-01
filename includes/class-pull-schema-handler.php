@@ -328,6 +328,14 @@ class TGS_Hub_Pull_Schema_Handler {
             'blog_id' => $blog_id,
         );
 
+        // Debug log
+        error_log('Hub get_local_data for blog_id=' . $blog_id . ': ' . $total_records . ' records');
+        foreach ($data as $table => $records) {
+            if ($table !== 'summary' && is_array($records)) {
+                error_log('  - ' . $table . ': ' . count($records) . ' records');
+            }
+        }
+
         return $data;
     }
 
