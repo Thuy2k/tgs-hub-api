@@ -71,6 +71,7 @@ class TGS_Hub_API {
         if (is_admin()) {
             require_once TGS_HUB_API_PLUGIN_DIR . 'admin/class-client-dashboard.php';
             require_once TGS_HUB_API_PLUGIN_DIR . 'admin/class-sync-monitor.php';
+            require_once TGS_HUB_API_PLUGIN_DIR . 'admin/class-conflict-resolver.php';
         }
     }
 
@@ -161,11 +162,20 @@ class TGS_Hub_API {
 
         add_submenu_page(
             'tgs-hub-api',
-            __('Giám sát Sync', 'tgs-hub-api'),
-            __('Giám sát Sync', 'tgs-hub-api'),
+            __('Push Logs', 'tgs-hub-api'),
+            __('Push Logs', 'tgs-hub-api'),
             'manage_network',
             'tgs-hub-sync',
             array('TGS_Hub_Sync_Monitor', 'render')
+        );
+
+        add_submenu_page(
+            'tgs-hub-api',
+            __('Xử lý Conflicts', 'tgs-hub-api'),
+            __('Xử lý Conflicts', 'tgs-hub-api'),
+            'manage_network',
+            'tgs-hub-conflicts',
+            array('TGS_Hub_Conflict_Resolver', 'render')
         );
 
         add_submenu_page(

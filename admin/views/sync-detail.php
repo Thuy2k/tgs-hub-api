@@ -12,7 +12,7 @@ if (!defined('ABSPATH')) {
 <div class="wrap">
     <h1>
         <a href="<?php echo esc_url(admin_url('admin.php?page=tgs-hub-sync')); ?>" class="dashicons dashicons-arrow-left-alt2" style="text-decoration: none;"></a>
-        <?php printf(__('Sync Logs - %s', 'tgs-hub-api'), esc_html($client['store_id'])); ?>
+        <?php printf(__('Push Logs - %s', 'tgs-hub-api'), esc_html($client['store_id'])); ?>
     </h1>
 
     <div style="background: #fff; padding: 20px; margin: 20px 0; border-left: 4px solid #2271b1;">

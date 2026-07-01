@@ -10,9 +10,9 @@ if (!defined('ABSPATH')) {
 ?>
 
 <div class="wrap">
-    <h1><?php _e('Theo dõi Sync - Tất cả cửa hàng', 'tgs-hub-api'); ?></h1>
+    <h1><?php _e('Push Logs - Shop đẩy data lên Hub', 'tgs-hub-api'); ?></h1>
 
-    <p><?php _e('Hiển thị 100 sync logs gần nhất từ tất cả cửa hàng.', 'tgs-hub-api'); ?></p>
+    <p><?php _e('Hiển thị 100 push logs gần nhất từ tất cả cửa hàng.', 'tgs-hub-api'); ?></p>
 
     <table class="wp-list-table widefat fixed striped">
         <thead>
