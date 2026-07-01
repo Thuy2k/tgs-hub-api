@@ -15,7 +15,7 @@ class TGS_Hub_Pull_Schema_Handler {
 
     /**
      * Handle pull schema request
-     * GET /tgs-hub/v1/sync/pull-schema?since=2026-07-01 06:00:00
+     * GET /tgs-hub/v1/sync/pull-schema?since=2026-07-01 06:00:00&cursor_cat=123&cursor_product=456...
      */
     public static function handle($request) {
         $client = $request->get_param('_tgs_client');
@@ -23,11 +23,19 @@ class TGS_Hub_Pull_Schema_Handler {
         // Lấy timestamp cho incremental sync
         $since = $request->get_param('since');
 
+        // Lấy cursors cho từng bảng (pagination)
+        $cursors = array(
+            'categories' => $request->get_param('cursor_cat') ?? PHP_INT_MAX,
+            'products' => $request->get_param('cursor_product') ?? PHP_INT_MAX,
+            'policies' => $request->get_param('cursor_policy') ?? PHP_INT_MAX,
+            'lots' => $request->get_param('cursor_lot') ?? PHP_INT_MAX,
+        );
+
         // Lấy SQL statements từ DB thực tế (GLOBAL từ Hub, LOCAL từ blog)
         $sql_statements = self::extract_sql_from_database_class($client['blog_id']);
 
-        // Lấy dữ liệu GLOBAL cần pull về (incremental nếu có $since)
-        $global_data = self::get_global_data($client['blog_id'], $since);
+        // Lấy dữ liệu GLOBAL cần pull về (incremental nếu có $since, paginated)
+        $global_data = self::get_global_data($client['blog_id'], $since, $cursors);
 
         return new WP_REST_Response(array(
             'success' => true,
@@ -147,62 +155,151 @@ class TGS_Hub_Pull_Schema_Handler {
 
     /**
      * Lấy dữ liệu GLOBAL từ Hub để đẩy về Local
-     * Hỗ trợ incremental sync với timestamp
+     * Hỗ trợ incremental sync với timestamp + cursor-based pagination
+     *
+     * @param int $blog_id Blog ID (unused, reserved for future filtering)
+     * @param string|null $since Timestamp cho incremental sync
+     * @param array $cursors Array of cursors: ['categories' => 123, 'products' => 456, ...]
+     * @return array Data với pagination info
      */
-    private static function get_global_data($blog_id, $since = null) {
+    private static function get_global_data($blog_id, $since = null, $cursors = array()) {
         global $wpdb;
 
+        $limit = 500; // Batch size - tối ưu giữa hiệu suất và tránh timeout
         $data = array();
 
-        // Build WHERE clause cho incremental sync
-        $where_clause = '';
-        if ($since) {
-            // Chỉ lấy records thay đổi từ $since
-            $where_clause = $wpdb->prepare(
-                "WHERE updated_at > %s OR deleted_at > %s",
-                $since,
-                $since
+        // Default cursors nếu không truyền
+        if (empty($cursors)) {
+            $cursors = array(
+                'categories' => PHP_INT_MAX,
+                'products' => PHP_INT_MAX,
+                'policies' => PHP_INT_MAX,
+                'lots' => PHP_INT_MAX,
             );
         }
 
-        // 1. Lấy danh mục sản phẩm
-        $categories = $wpdb->get_results(
-            "SELECT * FROM wp_global_product_cat {$where_clause}",
-            ARRAY_A
+        // 1. Lấy danh mục sản phẩm (mới nhất trước)
+        $cat_result = self::fetch_table_batch(
+            'wp_global_product_cat',
+            'global_product_cat_id',
+            $since,
+            $cursors['categories'],
+            $limit
         );
-        $data['categories'] = $categories ?: array();
+        $data['categories'] = $cat_result['data'];
+        $data['cursor_cat_next'] = $cat_result['next_cursor'];
+        $data['has_more_categories'] = $cat_result['has_more'];
 
-        // 2. Lấy sản phẩm
-        $products = $wpdb->get_results(
-            "SELECT * FROM wp_global_product_name {$where_clause}",
-            ARRAY_A
+        // 2. Lấy sản phẩm (mới nhất trước)
+        $product_result = self::fetch_table_batch(
+            'wp_global_product_name',
+            'global_product_name_id',
+            $since,
+            $cursors['products'],
+            $limit
         );
-        $data['products'] = $products ?: array();
+        $data['products'] = $product_result['data'];
+        $data['cursor_product_next'] = $product_result['next_cursor'];
+        $data['has_more_products'] = $product_result['has_more'];
 
-        // 3. Lấy chính sách bán hàng
-        $policies = $wpdb->get_results(
-            "SELECT * FROM wp_global_selling_policy {$where_clause}",
-            ARRAY_A
+        // 3. Lấy chính sách bán hàng (mới nhất trước)
+        $policy_result = self::fetch_table_batch(
+            'wp_global_selling_policy',
+            'global_selling_policy_id',
+            $since,
+            $cursors['policies'],
+            $limit
         );
-        $data['selling_policies'] = $policies ?: array();
+        $data['selling_policies'] = $policy_result['data'];
+        $data['cursor_policy_next'] = $policy_result['next_cursor'];
+        $data['has_more_policies'] = $policy_result['has_more'];
 
-        // 4. Lấy lô hàng
-        $lots = $wpdb->get_results(
-            "SELECT * FROM wp_global_product_lots {$where_clause}",
-            ARRAY_A
+        // 4. Lấy lô hàng (mới nhất trước)
+        $lot_result = self::fetch_table_batch(
+            'wp_global_product_lots',
+            'global_product_lots_id',
+            $since,
+            $cursors['lots'],
+            $limit
         );
-        $data['product_lots'] = $lots ?: array();
+        $data['product_lots'] = $lot_result['data'];
+        $data['cursor_lot_next'] = $lot_result['next_cursor'];
+        $data['has_more_lots'] = $lot_result['has_more'];
 
         // Thống kê
         $data['summary'] = array(
-            'total_categories' => count($data['categories']),
-            'total_products' => count($data['products']),
-            'total_policies' => count($data['selling_policies']),
-            'total_lots' => count($data['product_lots']),
+            'batch_categories' => count($data['categories']),
+            'batch_products' => count($data['products']),
+            'batch_policies' => count($data['selling_policies']),
+            'batch_lots' => count($data['product_lots']),
             'since' => $since,
             'is_incremental' => !empty($since),
+            'has_more' => $cat_result['has_more'] || $product_result['has_more'] ||
+                          $policy_result['has_more'] || $lot_result['has_more'],
         );
 
         return $data;
+    }
+
+    /**
+     * Fetch một batch dữ liệu từ bảng với cursor-based pagination
+     * ORDER BY id DESC (mới nhất trước)
+     *
+     * @param string $table_name Tên bảng
+     * @param string $pk_column Tên cột primary key
+     * @param string|null $since Timestamp cho incremental sync
+     * @param int $cursor Cursor hiện tại (id lớn nhất đã lấy)
+     * @param int $limit Số records tối đa mỗi batch
+     * @return array ['data' => [], 'next_cursor' => int, 'has_more' => bool]
+     */
+    private static function fetch_table_batch($table_name, $pk_column, $since, $cursor, $limit) {
+        global $wpdb;
+
+        // Build WHERE clause
+        $where_parts = array();
+        $prepare_args = array();
+
+        // 1. Cursor filter (< cursor để lấy records cũ hơn)
+        $where_parts[] = "{$pk_column} < %d";
+        $prepare_args[] = $cursor;
+
+        // 2. Incremental sync filter (chỉ lấy records thay đổi sau $since)
+        if ($since) {
+            $where_parts[] = "(updated_at > %s OR deleted_at > %s)";
+            $prepare_args[] = $since;
+            $prepare_args[] = $since;
+        }
+
+        $where_clause = 'WHERE ' . implode(' AND ', $where_parts);
+
+        // 3. Thêm LIMIT
+        $prepare_args[] = $limit;
+
+        // Query
+        $query = $wpdb->prepare(
+            "SELECT * FROM {$table_name}
+             {$where_clause}
+             ORDER BY {$pk_column} DESC
+             LIMIT %d",
+            ...$prepare_args
+        );
+
+        $results = $wpdb->get_results($query, ARRAY_A);
+
+        // Tính next_cursor và has_more
+        $next_cursor = null;
+        $has_more = false;
+
+        if (!empty($results)) {
+            $last_record = end($results);
+            $next_cursor = $last_record[$pk_column];
+            $has_more = (count($results) == $limit); // Nếu đủ limit thì còn data
+        }
+
+        return array(
+            'data' => $results ?: array(),
+            'next_cursor' => $next_cursor,
+            'has_more' => $has_more,
+        );
     }
 }
