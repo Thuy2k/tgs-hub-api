@@ -15,16 +15,19 @@ class TGS_Hub_Pull_Schema_Handler {
 
     /**
      * Handle pull schema request
-     * GET /tgs-hub/v1/sync/pull-schema
+     * GET /tgs-hub/v1/sync/pull-schema?since=2026-07-01 06:00:00
      */
     public static function handle($request) {
         $client = $request->get_param('_tgs_client');
 
+        // Lấy timestamp cho incremental sync
+        $since = $request->get_param('since');
+
         // Lấy SQL statements từ DB thực tế (GLOBAL từ Hub, LOCAL từ blog)
         $sql_statements = self::extract_sql_from_database_class($client['blog_id']);
 
-        // Lấy dữ liệu GLOBAL cần pull về
-        $global_data = self::get_global_data($client['blog_id']);
+        // Lấy dữ liệu GLOBAL cần pull về (incremental nếu có $since)
+        $global_data = self::get_global_data($client['blog_id'], $since);
 
         return new WP_REST_Response(array(
             'success' => true,
@@ -32,7 +35,8 @@ class TGS_Hub_Pull_Schema_Handler {
                 'schema_version' => '1.0.0',
                 'sql_statements' => $sql_statements,
                 'global_data' => $global_data,
-                'instructions' => 'Execute SQL statements to create tables, then insert global data',
+                'server_time' => current_time('mysql', true), // Để Local update watermark
+                'instructions' => 'Execute SQL statements to create tables, then upsert global data',
             ),
         ), 200);
     }
@@ -143,36 +147,48 @@ class TGS_Hub_Pull_Schema_Handler {
 
     /**
      * Lấy dữ liệu GLOBAL từ Hub để đẩy về Local
+     * Hỗ trợ incremental sync với timestamp
      */
-    private static function get_global_data($blog_id) {
+    private static function get_global_data($blog_id, $since = null) {
         global $wpdb;
 
         $data = array();
 
-        // 1. Lấy danh mục sản phẩm - TẤT CẢ
+        // Build WHERE clause cho incremental sync
+        $where_clause = '';
+        if ($since) {
+            // Chỉ lấy records thay đổi từ $since
+            $where_clause = $wpdb->prepare(
+                "WHERE updated_at > %s OR deleted_at > %s",
+                $since,
+                $since
+            );
+        }
+
+        // 1. Lấy danh mục sản phẩm
         $categories = $wpdb->get_results(
-            "SELECT * FROM wp_global_product_cat",
+            "SELECT * FROM wp_global_product_cat {$where_clause}",
             ARRAY_A
         );
         $data['categories'] = $categories ?: array();
 
-        // 2. Lấy sản phẩm - TẤT CẢ
+        // 2. Lấy sản phẩm
         $products = $wpdb->get_results(
-            "SELECT * FROM wp_global_product_name",
+            "SELECT * FROM wp_global_product_name {$where_clause}",
             ARRAY_A
         );
         $data['products'] = $products ?: array();
 
-        // 3. Lấy chính sách bán hàng - TẤT CẢ
+        // 3. Lấy chính sách bán hàng
         $policies = $wpdb->get_results(
-            "SELECT * FROM wp_global_selling_policy",
+            "SELECT * FROM wp_global_selling_policy {$where_clause}",
             ARRAY_A
         );
         $data['selling_policies'] = $policies ?: array();
 
-        // 4. Lấy lô hàng - TẤT CẢ
+        // 4. Lấy lô hàng
         $lots = $wpdb->get_results(
-            "SELECT * FROM wp_global_product_lots",
+            "SELECT * FROM wp_global_product_lots {$where_clause}",
             ARRAY_A
         );
         $data['product_lots'] = $lots ?: array();
@@ -183,6 +199,8 @@ class TGS_Hub_Pull_Schema_Handler {
             'total_products' => count($data['products']),
             'total_policies' => count($data['selling_policies']),
             'total_lots' => count($data['product_lots']),
+            'since' => $since,
+            'is_incremental' => !empty($since),
         );
 
         return $data;
