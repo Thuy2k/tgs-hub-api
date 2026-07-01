@@ -174,64 +174,124 @@ class TGS_Hub_Push_Handler {
     }
 
     /**
-     * Apply change vào database
+     * Apply change vào database - INSERT all 3 ledgers (SALE + EXPORT + RECEIPT)
      */
     private static function apply_change($table_name, $record_id, $action, $payload) {
         global $wpdb;
 
-        // Only handle local_ledger - use TGS_POS create_order()
+        error_log('[TGS Hub Push] apply_change called - table: ' . $table_name . ', action: ' . $action);
+
+        // Only handle local_ledger
         if ($table_name !== 'wp_local_ledger') {
+            error_log('[TGS Hub Push] Unsupported table: ' . $table_name);
             return new WP_Error('unsupported_table', 'Only wp_local_ledger is supported');
         }
 
         if ($action !== 'insert') {
+            error_log('[TGS Hub Push] Unsupported action: ' . $action);
             return new WP_Error('unsupported_action', 'Only insert action is supported');
         }
 
-        // Parse full order payload
-        $ledger_data = $payload['ledger'] ?? array();
-        $items_data = $payload['items'] ?? array();
-        $meta_data = $payload['meta'] ?? array();
+        // Parse payload
+        $sale_ledger = $payload['sale_ledger'] ?? array();
+        $sale_meta = $payload['sale_meta'] ?? array();
+        $export_ledger = $payload['export_ledger'] ?? array();
+        $export_items = $payload['export_items'] ?? array();
+        $receipt_ledgers = $payload['receipt_ledgers'] ?? array();
 
-        if (empty($ledger_data)) {
-            return new WP_Error('empty_payload', 'Missing ledger data');
+        if (empty($sale_ledger)) {
+            error_log('[TGS Hub Push] Empty sale_ledger');
+            return new WP_Error('empty_payload', 'Missing sale_ledger');
         }
 
-        // Check if TGS_POS_Order_Handler exists
-        if (!class_exists('TGS_POS_Order_Handler')) {
-            return new WP_Error('missing_handler', 'TGS_POS_Order_Handler not found - plugin tgs_pos required');
+        error_log('[TGS Hub Push] Inserting order - SALE + ' . count($receipt_ledgers) . ' RECEIPT(s) + EXPORT with ' . count($export_items) . ' items');
+
+        $ledger_table = $wpdb->prefix . 'local_ledger';
+        $item_table = $wpdb->prefix . 'local_ledger_item';
+        $meta_table = $wpdb->prefix . 'local_ledger_meta';
+
+        // 1. Insert SALE_ORDER meta first (if exists)
+        $sale_meta_id = null;
+        if (!empty($sale_meta)) {
+            $wpdb->insert($meta_table, array(
+                'local_ledger_meta_value' => json_encode($sale_meta, JSON_UNESCAPED_UNICODE),
+                'user_id' => $sale_ledger['user_id'] ?? 0,
+                'created_at' => current_time('mysql'),
+                'updated_at' => current_time('mysql'),
+            ));
+            $sale_meta_id = $wpdb->insert_id;
         }
 
-        // Reconstruct order data for create_order()
-        $order_data = array(
-            'sale_code' => $ledger_data['sale_code'] ?? '',
-            'customer_name' => $ledger_data['customer_name'] ?? '',
-            'customer_phone' => $ledger_data['customer_phone'] ?? '',
-            'products_data' => array(),
-            'total' => $ledger_data['total_amount'] ?? 0,
-            'discount' => $ledger_data['discount_amount'] ?? 0,
-            'applied_promotions' => json_decode($ledger_data['applied_promotions'] ?? '[]', true),
-            'payment_plan' => json_decode($meta_data['payment_plan'] ?? '{}', true),
-            'source_type' => $ledger_data['source_type'] ?? 1,
-        );
-
-        // Map items
-        foreach ($items_data as $item) {
-            $order_data['products_data'][] = array(
-                'product_id' => $item['product_id'] ?? 0,
-                'sku' => $item['sku'] ?? '',
-                'quantity' => $item['quantity'] ?? 0,
-                'price' => $item['price'] ?? 0,
-                'unit' => $item['unit'] ?? 'Cái',
-            );
+        // 2. Insert SALE_ORDER ledger
+        $sale_insert = $sale_ledger;
+        unset($sale_insert['local_ledger_id']); // Hub generates new ID
+        if ($sale_meta_id) {
+            $sale_insert['local_ledger_meta_id'] = $sale_meta_id;
         }
 
-        // Call TGS_POS create_order()
-        $result = TGS_POS_Order_Handler::create_order($order_data);
+        $wpdb->insert($ledger_table, $sale_insert);
+        $new_sale_id = $wpdb->insert_id;
 
-        if (is_wp_error($result)) {
-            return $result;
+        if (!$new_sale_id) {
+            error_log('[TGS Hub Push] Failed to insert SALE ledger: ' . $wpdb->last_error);
+            return new WP_Error('insert_failed', 'Failed to insert SALE ledger');
         }
+
+        error_log('[TGS Hub Push] SALE ledger inserted with ID: ' . $new_sale_id);
+
+        // 3. Insert RECEIPT ledger(s)
+        foreach ($receipt_ledgers as $receipt) {
+            // Insert RECEIPT meta if exists
+            $receipt_meta_id = null;
+            if (!empty($receipt['meta'])) {
+                $wpdb->insert($meta_table, array(
+                    'local_ledger_meta_value' => json_encode($receipt['meta'], JSON_UNESCAPED_UNICODE),
+                    'user_id' => $receipt['user_id'] ?? 0,
+                    'created_at' => current_time('mysql'),
+                    'updated_at' => current_time('mysql'),
+                ));
+                $receipt_meta_id = $wpdb->insert_id;
+            }
+
+            // Insert RECEIPT ledger
+            $receipt_insert = $receipt;
+            unset($receipt_insert['local_ledger_id']);
+            unset($receipt_insert['meta']); // Already inserted
+            $receipt_insert['local_ledger_parent_id'] = $new_sale_id; // Link to new SALE
+            if ($receipt_meta_id) {
+                $receipt_insert['local_ledger_meta_id'] = $receipt_meta_id;
+            }
+
+            $wpdb->insert($ledger_table, $receipt_insert);
+            error_log('[TGS Hub Push] RECEIPT inserted with ID: ' . $wpdb->insert_id);
+        }
+
+        // 4. Insert EXPORT ledger
+        if (!empty($export_ledger)) {
+            $export_insert = $export_ledger;
+            unset($export_insert['local_ledger_id']);
+            $export_insert['local_ledger_parent_id'] = $new_sale_id; // Link to new SALE
+
+            $wpdb->insert($ledger_table, $export_insert);
+            $new_export_id = $wpdb->insert_id;
+
+            if ($new_export_id) {
+                error_log('[TGS Hub Push] EXPORT ledger inserted with ID: ' . $new_export_id);
+
+                // 5. Insert EXPORT items
+                foreach ($export_items as $item) {
+                    $item_insert = $item;
+                    unset($item_insert['local_ledger_item_id']);
+                    $item_insert['local_ledger_id'] = $new_export_id; // Link to new EXPORT
+
+                    $wpdb->insert($item_table, $item_insert);
+                }
+
+                error_log('[TGS Hub Push] Inserted ' . count($export_items) . ' items');
+            }
+        }
+
+        error_log('[TGS Hub Push] Full order inserted successfully at Hub');
 
         return true;
     }
