@@ -42,7 +42,11 @@ if (!defined('ABSPATH')) {
                         </td>
                         <td><?php echo esc_html($log['created_at']); ?></td>
                         <td>
-                            <?php if ($log['sync_direction'] === 'push'): ?>
+                            <?php
+                            // Logs từ Shop push lên Hub → luôn là Push
+                            $direction = $log['sync_direction'] ?? 'push';
+                            if ($direction === 'push'):
+                            ?>
                                 <span class="dashicons dashicons-upload" style="color: #2271b1;"></span> Push
                             <?php else: ?>
                                 <span class="dashicons dashicons-download" style="color: #00a32a;"></span> Pull
