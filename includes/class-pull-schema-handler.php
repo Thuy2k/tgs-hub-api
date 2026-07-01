@@ -20,8 +20,8 @@ class TGS_Hub_Pull_Schema_Handler {
     public static function handle($request) {
         $client = $request->get_param('_tgs_client');
 
-        // Lấy SQL statements từ class-tgs-database.php
-        $sql_statements = self::extract_sql_from_database_class();
+        // Lấy SQL statements từ DB thực tế (GLOBAL từ Hub, LOCAL từ blog)
+        $sql_statements = self::extract_sql_from_database_class($client['blog_id']);
 
         // Lấy dữ liệu GLOBAL cần pull về
         $global_data = self::get_global_data($client['blog_id']);
@@ -38,60 +38,82 @@ class TGS_Hub_Pull_Schema_Handler {
     }
 
     /**
-     * Extract SQL statements từ class-tgs-database.php
-     * Gọi các method sql_* để lấy CREATE TABLE statements
+     * Extract SQL statements từ database thực tế
+     * GLOBAL: lấy từ Hub main DB
+     * LOCAL: lấy từ multisite blog đang kết nối
      */
-    private static function extract_sql_from_database_class() {
-        // Load class TGS_Shop_Database
-        if (!class_exists('TGS_Shop_Database')) {
-            require_once WP_PLUGIN_DIR . '/tgs_shop_management/database/class-tgs-database.php';
-        }
-
+    private static function extract_sql_from_database_class($blog_id) {
         global $wpdb;
-        $charset_collate = $wpdb->get_charset_collate();
-
-        // Lấy cấu hình từ admin
-        $config = TGS_Hub_Schema_Config::get_config();
-
-        // Sử dụng Reflection để gọi private methods
-        $reflection = new ReflectionClass('TGS_Shop_Database');
 
         $sql_statements = array(
             'global' => array(),
             'local' => array(),
         );
 
-        // GLOBAL tables - lấy từ config
+        // Lấy config bảng nào cần pull
+        $config = TGS_Hub_Schema_Config::get_config();
+
+        // 1. GLOBAL tables - lấy CREATE TABLE từ Hub DB thực tế
         foreach ($config['global'] as $method_name) {
-            try {
-                $method = $reflection->getMethod($method_name);
-                $method->setAccessible(true);
-                $sql = $method->invoke(null, $charset_collate);
+            // Extract tên bảng từ method name: sql_global_product_name -> wp_global_product_name
+            $table_name = str_replace('sql_', '', $method_name);
+            $table_name = 'wp_' . $table_name;
+
+            // Lấy CREATE TABLE từ DB thực tế
+            $create_sql = self::get_create_table_sql($table_name);
+            if ($create_sql) {
                 $sql_statements['global'][] = array(
                     'method' => $method_name,
-                    'sql' => $sql,
+                    'table' => $table_name,
+                    'sql' => $create_sql,
                 );
-            } catch (Exception $e) {
-                // Skip if method doesn't exist
             }
         }
 
-        // LOCAL tables - lấy từ config
+        // 2. LOCAL tables - lấy từ bảng multisite blog đang kết nối
         foreach ($config['local'] as $method_name) {
-            try {
-                $method = $reflection->getMethod($method_name);
-                $method->setAccessible(true);
-                $sql = $method->invoke(null, $charset_collate);
+            // Extract tên bảng: sql_local_ledger -> local_ledger
+            $base_table = str_replace('sql_', '', $method_name);
+
+            // Tên bảng thực tế trong blog: wp_5_local_ledger
+            $blog_table = $wpdb->get_blog_prefix($blog_id) . $base_table;
+
+            // Lấy CREATE TABLE từ blog table
+            $create_sql = self::get_create_table_sql($blog_table);
+            if ($create_sql) {
+                // Replace blog prefix bằng placeholder để Local apply đúng
+                $generic_sql = str_replace($blog_table, '{{prefix}}' . $base_table, $create_sql);
+
                 $sql_statements['local'][] = array(
                     'method' => $method_name,
-                    'sql' => $sql,
+                    'table' => $base_table,
+                    'sql' => $generic_sql,
                 );
-            } catch (Exception $e) {
-                // Skip if method doesn't exist
             }
         }
 
         return $sql_statements;
+    }
+
+    /**
+     * Lấy CREATE TABLE SQL từ database thực tế
+     */
+    private static function get_create_table_sql($table_name) {
+        global $wpdb;
+
+        // Check table tồn tại
+        $exists = $wpdb->get_var($wpdb->prepare("SHOW TABLES LIKE %s", $table_name));
+        if (!$exists) {
+            return null;
+        }
+
+        // Lấy CREATE TABLE statement
+        $result = $wpdb->get_row("SHOW CREATE TABLE `{$table_name}`", ARRAY_N);
+        if (!$result || !isset($result[1])) {
+            return null;
+        }
+
+        return $result[1];
     }
 
     /**
@@ -127,30 +149,30 @@ class TGS_Hub_Pull_Schema_Handler {
 
         $data = array();
 
-        // 1. Lấy danh mục sản phẩm
+        // 1. Lấy danh mục sản phẩm - TẤT CẢ
         $categories = $wpdb->get_results(
-            "SELECT * FROM wp_global_product_cat LIMIT 100",
+            "SELECT * FROM wp_global_product_cat",
             ARRAY_A
         );
         $data['categories'] = $categories ?: array();
 
-        // 2. Lấy sản phẩm
+        // 2. Lấy sản phẩm - TẤT CẢ
         $products = $wpdb->get_results(
-            "SELECT * FROM wp_global_product_name LIMIT 100",
+            "SELECT * FROM wp_global_product_name",
             ARRAY_A
         );
         $data['products'] = $products ?: array();
 
-        // 3. Lấy chính sách bán hàng
+        // 3. Lấy chính sách bán hàng - TẤT CẢ
         $policies = $wpdb->get_results(
-            "SELECT * FROM wp_global_selling_policy LIMIT 100",
+            "SELECT * FROM wp_global_selling_policy",
             ARRAY_A
         );
         $data['selling_policies'] = $policies ?: array();
 
-        // 4. Lấy lô hàng
+        // 4. Lấy lô hàng - TẤT CẢ
         $lots = $wpdb->get_results(
-            "SELECT * FROM wp_global_product_lots LIMIT 100",
+            "SELECT * FROM wp_global_product_lots",
             ARRAY_A
         );
         $data['product_lots'] = $lots ?: array();
