@@ -281,32 +281,6 @@ class TGS_Hub_Push_Handler {
 
             if ($new_export_id) {
                 error_log('[TGS Hub Push] EXPORT ledger inserted with ID: ' . $new_export_id);
-            }
-
-            // Insert RECEIPT ledger
-            $receipt_insert = $receipt;
-            unset($receipt_insert['local_ledger_id']);
-            unset($receipt_insert['meta']); // Already inserted
-            $receipt_insert['local_ledger_parent_id'] = $new_sale_id; // Link to new SALE
-            if ($receipt_meta_id) {
-                $receipt_insert['local_ledger_meta_id'] = $receipt_meta_id;
-            }
-
-            $wpdb->insert($ledger_table, $receipt_insert);
-            error_log('[TGS Hub Push] RECEIPT inserted with ID: ' . $wpdb->insert_id);
-        }
-
-        // 4. Insert EXPORT ledger
-        if (!empty($export_ledger)) {
-            $export_insert = $export_ledger;
-            unset($export_insert['local_ledger_id']);
-            $export_insert['local_ledger_parent_id'] = $new_sale_id; // Link to new SALE
-
-            $wpdb->insert($ledger_table, $export_insert);
-            $new_export_id = $wpdb->insert_id;
-
-            if ($new_export_id) {
-                error_log('[TGS Hub Push] EXPORT ledger inserted with ID: ' . $new_export_id);
 
                 // 5. Insert EXPORT items and build ID mapping
                 $new_item_ids = array();
