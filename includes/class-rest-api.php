@@ -73,7 +73,13 @@ class TGS_Hub_REST_API {
         $blog_id = $request->get_header('X-Blog-ID');
         $store_id = $request->get_header('X-Store-ID');
 
+        error_log('[TGS Hub API] check_client_permission called');
+        error_log('[TGS Hub API] Auth header: ' . ($auth_header ?: 'EMPTY'));
+        error_log('[TGS Hub API] Blog ID: ' . ($blog_id ?: 'EMPTY'));
+        error_log('[TGS Hub API] Store ID: ' . ($store_id ?: 'EMPTY'));
+
         if (empty($auth_header) || empty($blog_id)) {
+            error_log('[TGS Hub API] REJECTED: Missing auth or blog_id');
             return new WP_Error(
                 'missing_auth',
                 'Missing Authorization header or X-Blog-ID',
@@ -88,8 +94,11 @@ class TGS_Hub_REST_API {
         $client = TGS_Hub_Auth_Handler::verify_token($token, $blog_id);
 
         if (is_wp_error($client)) {
+            error_log('[TGS Hub API] REJECTED: verify_token failed - ' . $client->get_error_message());
             return $client;
         }
+
+        error_log('[TGS Hub API] PASSED: Client verified - ' . print_r($client, true));
 
         // Store client info in request for later use
         $request->set_param('_tgs_client', $client);
