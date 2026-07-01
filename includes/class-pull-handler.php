@@ -148,7 +148,8 @@ class TGS_Hub_Pull_Handler {
 
             $where = '1=1';
             if ($last_pull_at) {
-                $where = $wpdb->prepare('(updated_at > %s OR deleted_at > %s)', $last_pull_at, $last_pull_at);
+                // Use >= instead of > to include records with exact timestamp
+                $where = $wpdb->prepare('(updated_at >= %s OR deleted_at >= %s)', $last_pull_at, $last_pull_at);
             }
 
             $results = $wpdb->get_results("SELECT * FROM {$table} WHERE {$where} ORDER BY updated_at ASC LIMIT 100", ARRAY_A);
