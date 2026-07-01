@@ -222,9 +222,10 @@ class TGS_Hub_Push_Handler {
             $sale_meta_id = $wpdb->insert_id;
         }
 
-        // 2. Insert SALE_ORDER ledger
+        // 2. Insert SALE_ORDER ledger (without item_id mapping yet)
         $sale_insert = $sale_ledger;
         unset($sale_insert['local_ledger_id']); // Hub generates new ID
+        unset($sale_insert['local_ledger_item_id']); // Will update after items created
         if ($sale_meta_id) {
             $sale_insert['local_ledger_meta_id'] = $sale_meta_id;
         }
@@ -257,6 +258,35 @@ class TGS_Hub_Push_Handler {
             $receipt_insert = $receipt;
             unset($receipt_insert['local_ledger_id']);
             unset($receipt_insert['meta']); // Already inserted
+            unset($receipt_insert['local_ledger_item_id']); // Receipt has no items
+            $receipt_insert['local_ledger_parent_id'] = $new_sale_id; // Link to new SALE
+            if ($receipt_meta_id) {
+                $receipt_insert['local_ledger_meta_id'] = $receipt_meta_id;
+            }
+
+            $wpdb->insert($ledger_table, $receipt_insert);
+            error_log('[TGS Hub Push] RECEIPT inserted with ID: ' . $wpdb->insert_id);
+        }
+
+        // 4. Insert EXPORT ledger (without item_id mapping yet)
+        $new_export_id = null;
+        if (!empty($export_ledger)) {
+            $export_insert = $export_ledger;
+            unset($export_insert['local_ledger_id']);
+            unset($export_insert['local_ledger_item_id']); // Will update after items created
+            $export_insert['local_ledger_parent_id'] = $new_sale_id; // Link to new SALE
+
+            $wpdb->insert($ledger_table, $export_insert);
+            $new_export_id = $wpdb->insert_id;
+
+            if ($new_export_id) {
+                error_log('[TGS Hub Push] EXPORT ledger inserted with ID: ' . $new_export_id);
+            }
+
+            // Insert RECEIPT ledger
+            $receipt_insert = $receipt;
+            unset($receipt_insert['local_ledger_id']);
+            unset($receipt_insert['meta']); // Already inserted
             $receipt_insert['local_ledger_parent_id'] = $new_sale_id; // Link to new SALE
             if ($receipt_meta_id) {
                 $receipt_insert['local_ledger_meta_id'] = $receipt_meta_id;
@@ -278,16 +308,40 @@ class TGS_Hub_Push_Handler {
             if ($new_export_id) {
                 error_log('[TGS Hub Push] EXPORT ledger inserted with ID: ' . $new_export_id);
 
-                // 5. Insert EXPORT items
+                // 5. Insert EXPORT items and build ID mapping
+                $new_item_ids = array();
                 foreach ($export_items as $item) {
                     $item_insert = $item;
-                    unset($item_insert['local_ledger_item_id']);
+                    unset($item_insert['local_ledger_item_id']); // Let Hub auto-generate new ID
                     $item_insert['local_ledger_id'] = $new_export_id; // Link to new EXPORT
 
                     $wpdb->insert($item_table, $item_insert);
+                    $new_item_ids[] = $wpdb->insert_id;
                 }
 
                 error_log('[TGS Hub Push] Inserted ' . count($export_items) . ' items');
+
+                // 6. Update EXPORT ledger with new item IDs
+                if (!empty($new_item_ids)) {
+                    $items_json = json_encode($new_item_ids);
+                    $wpdb->update(
+                        $ledger_table,
+                        array('local_ledger_item_id' => $items_json),
+                        array('local_ledger_id' => $new_export_id)
+                    );
+                    error_log('[TGS Hub Push] Updated EXPORT ledger with item IDs: ' . $items_json);
+                }
+
+                // 7. Update SALE ledger with same item IDs
+                if (!empty($new_item_ids)) {
+                    $items_json = json_encode($new_item_ids);
+                    $wpdb->update(
+                        $ledger_table,
+                        array('local_ledger_item_id' => $items_json),
+                        array('local_ledger_id' => $new_sale_id)
+                    );
+                    error_log('[TGS Hub Push] Updated SALE ledger with item IDs: ' . $items_json);
+                }
             }
         }
 
