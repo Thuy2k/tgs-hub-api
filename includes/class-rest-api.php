@@ -50,6 +50,13 @@ class TGS_Hub_REST_API {
             'permission_callback' => array(__CLASS__, 'check_client_permission'),
         ));
 
+        // Pull Schema endpoint - Local pull schema & global data
+        register_rest_route(self::NAMESPACE, '/sync/pull-schema', array(
+            'methods'  => WP_REST_Server::READABLE,
+            'callback' => array('TGS_Hub_Pull_Schema_Handler', 'handle'),
+            'permission_callback' => array(__CLASS__, 'check_client_permission'),
+        ));
+
         // Heartbeat endpoint
         register_rest_route(self::NAMESPACE, '/device/heartbeat', array(
             'methods'  => WP_REST_Server::CREATABLE,

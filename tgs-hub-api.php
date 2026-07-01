@@ -56,11 +56,15 @@ class TGS_Hub_API {
         require_once TGS_HUB_API_PLUGIN_DIR . 'includes/class-auth-handler.php';
         require_once TGS_HUB_API_PLUGIN_DIR . 'includes/class-push-handler.php';
         require_once TGS_HUB_API_PLUGIN_DIR . 'includes/class-pull-handler.php';
+        require_once TGS_HUB_API_PLUGIN_DIR . 'includes/class-pull-schema-handler.php';
         require_once TGS_HUB_API_PLUGIN_DIR . 'includes/class-ack-handler.php';
         require_once TGS_HUB_API_PLUGIN_DIR . 'includes/class-client-manager.php';
         require_once TGS_HUB_API_PLUGIN_DIR . 'includes/class-token-generator.php';
         require_once TGS_HUB_API_PLUGIN_DIR . 'includes/class-idempotency.php';
         require_once TGS_HUB_API_PLUGIN_DIR . 'includes/class-sync-coordinator.php';
+
+        // Schema Config - cần load luôn vì REST API sẽ dùng
+        require_once TGS_HUB_API_PLUGIN_DIR . 'admin/class-schema-config.php';
 
         // Admin classes
         if (is_admin()) {
@@ -161,6 +165,15 @@ class TGS_Hub_API {
             'manage_network',
             'tgs-hub-sync',
             array('TGS_Hub_Sync_Monitor', 'render')
+        );
+
+        add_submenu_page(
+            'tgs-hub-api',
+            __('Cấu hình Schema', 'tgs-hub-api'),
+            __('Cấu hình Schema', 'tgs-hub-api'),
+            'manage_network',
+            'tgs-hub-schema-config',
+            array('TGS_Hub_Schema_Config', 'render')
         );
     }
 }
