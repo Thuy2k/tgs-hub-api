@@ -240,7 +240,8 @@ class TGS_Hub_Push_Handler {
 
         error_log('[TGS Hub Push] SALE ledger inserted with ID: ' . $new_sale_id);
 
-        // 3. Insert RECEIPT ledger(s)
+        // 3. Insert RECEIPT ledger(s) and track IDs for later update
+        $receipt_ids = array();
         foreach ($receipt_ledgers as $receipt) {
             // Insert RECEIPT meta if exists
             $receipt_meta_id = null;
@@ -258,13 +259,14 @@ class TGS_Hub_Push_Handler {
             $receipt_insert = $receipt;
             unset($receipt_insert['local_ledger_id']);
             unset($receipt_insert['meta']); // Already inserted
-            unset($receipt_insert['local_ledger_item_id']); // Receipt has no items
+            unset($receipt_insert['local_ledger_item_id']); // Will update after items created
             $receipt_insert['local_ledger_parent_id'] = $new_sale_id; // Link to new SALE
             if ($receipt_meta_id) {
                 $receipt_insert['local_ledger_meta_id'] = $receipt_meta_id;
             }
 
             $wpdb->insert($ledger_table, $receipt_insert);
+            $receipt_ids[] = $wpdb->insert_id;
             error_log('[TGS Hub Push] RECEIPT inserted with ID: ' . $wpdb->insert_id);
         }
 
@@ -315,6 +317,19 @@ class TGS_Hub_Push_Handler {
                         array('local_ledger_id' => $new_sale_id)
                     );
                     error_log('[TGS Hub Push] Updated SALE ledger with item IDs: ' . $items_json);
+                }
+
+                // 8. Update RECEIPT ledgers with same item IDs
+                if (!empty($new_item_ids) && !empty($receipt_ids)) {
+                    $items_json = json_encode($new_item_ids);
+                    foreach ($receipt_ids as $receipt_id) {
+                        $wpdb->update(
+                            $ledger_table,
+                            array('local_ledger_item_id' => $items_json),
+                            array('local_ledger_id' => $receipt_id)
+                        );
+                    }
+                    error_log('[TGS Hub Push] Updated ' . count($receipt_ids) . ' RECEIPT ledgers with item IDs: ' . $items_json);
                 }
             }
         }
