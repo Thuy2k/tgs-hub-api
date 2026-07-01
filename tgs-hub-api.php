@@ -26,6 +26,7 @@ define('TGS_HUB_API_PLUGIN_URL', plugin_dir_url(__FILE__));
 // Table names
 define('TGS_HUB_TABLE_CLIENTS', 'tgs_hub_clients');
 define('TGS_HUB_TABLE_SYNC_LOG', 'tgs_sync_log');
+define('TGS_HUB_TABLE_CONFLICTS', 'tgs_sync_conflicts');
 
 /**
  * Main plugin class

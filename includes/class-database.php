@@ -29,6 +29,9 @@ class TGS_Hub_Database {
         // 2. Bảng sync log (Hub side)
         dbDelta(self::sql_sync_log($charset_collate));
 
+        // 3. Bảng conflict log (Hub side)
+        dbDelta(self::sql_sync_conflicts($charset_collate));
+
         // Update DB version
         update_site_option(self::OPTION_DB_VERSION, self::DB_VERSION);
     }
@@ -102,6 +105,44 @@ class TGS_Hub_Database {
             INDEX idx_status (sync_status),
             INDEX idx_created (created_at),
             INDEX idx_direction (direction, sync_status)
+        ) {$charset_collate};";
+    }
+
+    /**
+     * Bảng wp_tgs_sync_conflicts - Log conflicts khi đồng bộ
+     * Ghi lại các trường hợp conflict để admin xử lý manual
+     */
+    private static function sql_sync_conflicts($charset_collate) {
+        global $wpdb;
+        $table = $wpdb->base_prefix . TGS_HUB_TABLE_CONFLICTS;
+
+        return "CREATE TABLE {$table} (
+            id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+
+            blog_id INT UNSIGNED NOT NULL COMMENT 'Blog ID của client',
+            event_id VARCHAR(64) NOT NULL COMMENT 'Event ID từ Local',
+
+            table_name VARCHAR(64) NOT NULL COMMENT 'Tên bảng bị conflict',
+            record_id BIGINT UNSIGNED NOT NULL COMMENT 'ID bản ghi',
+            conflict_type ENUM('insert_duplicate', 'update_outdated', 'delete_missing') NOT NULL,
+
+            local_data JSON NOT NULL COMMENT 'Dữ liệu từ Local',
+            hub_data JSON DEFAULT NULL COMMENT 'Dữ liệu hiện tại ở Hub',
+
+            local_updated_at DATETIME DEFAULT NULL COMMENT 'Timestamp từ Local',
+            hub_updated_at DATETIME DEFAULT NULL COMMENT 'Timestamp ở Hub',
+
+            resolution_status ENUM('pending', 'resolved_use_local', 'resolved_use_hub', 'resolved_manual') NOT NULL DEFAULT 'pending',
+            resolution_note TEXT DEFAULT NULL,
+            resolved_by VARCHAR(100) DEFAULT NULL,
+            resolved_at DATETIME DEFAULT NULL,
+
+            created_at DATETIME NOT NULL,
+
+            INDEX idx_blog_table (blog_id, table_name),
+            INDEX idx_status (resolution_status),
+            INDEX idx_created (created_at),
+            INDEX idx_record (table_name, record_id)
         ) {$charset_collate};";
     }
 
