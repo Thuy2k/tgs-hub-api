@@ -111,7 +111,6 @@ class TGS_Hub_Push_Handler {
         $rejected = array();
         $duplicates = array();
 
-        // Start transaction
         $wpdb->query('START TRANSACTION');
 
         try {
@@ -123,39 +122,28 @@ class TGS_Hub_Push_Handler {
                 $payload = $event['payload'] ?? null;
                 $data_hash = $event['data_hash'] ?? '';
 
-                // Validate
                 if (empty($event_id) || empty($table_name) || empty($action) || empty($payload)) {
                     throw new Exception("Invalid event: {$event_id}");
                 }
 
-                // Check idempotency (đã xử lý event này chưa?)
                 if (TGS_Hub_Idempotency::is_duplicate($blog_id, $event_id)) {
                     $duplicates[] = $event_id;
                     continue;
                 }
 
-                // Apply change vào database
                 $result = self::apply_change($table_name, $record_id, $action, $payload);
 
                 if (is_wp_error($result)) {
-                    // Nếu là conflict → log nhưng vẫn rollback cả transaction
-                    if ($result->get_error_code() === 'conflict') {
-                        self::log_conflict($blog_id, $event_id, $table_name, $record_id, $action, $payload, $result->get_error_data());
-                    }
-
                     throw new Exception($result->get_error_message());
                 }
 
-                // Log success
                 self::log_sync($blog_id, $event_id, $table_name, $record_id, $action, $payload, $data_hash, 'applied', null);
                 $accepted[] = $event_id;
             }
 
-            // Commit nếu tất cả thành công
             $wpdb->query('COMMIT');
 
         } catch (Exception $e) {
-            // Rollback nếu có lỗi
             $wpdb->query('ROLLBACK');
 
             // Mark tất cả events trong transaction là rejected
@@ -191,84 +179,58 @@ class TGS_Hub_Push_Handler {
     private static function apply_change($table_name, $record_id, $action, $payload) {
         global $wpdb;
 
-        // Lấy whitelist từ config (các bảng LOCAL cho phép PUSH)
-        $config = TGS_Hub_Schema_Config::get_config();
-        $allowed_tables_config = $config['local_push'] ?? array();
-
-        // Convert từ method name sang table name
-        $allowed_tables = array();
-        foreach ($allowed_tables_config as $method_name) {
-            // sql_local_ledger → wp_local_ledger
-            $table = 'wp_' . str_replace('sql_', '', $method_name);
-            $allowed_tables[] = $table;
+        // Only handle local_ledger - use TGS_POS create_order()
+        if ($table_name !== 'wp_local_ledger') {
+            return new WP_Error('unsupported_table', 'Only wp_local_ledger is supported');
         }
 
-        if (!in_array($table_name, $allowed_tables)) {
-            return new WP_Error('forbidden_table', "Bảng {$table_name} không được phép sync (chưa được bật trong Hub Schema Config)");
+        if ($action !== 'insert') {
+            return new WP_Error('unsupported_action', 'Only insert action is supported');
         }
 
-        $table = $wpdb->prefix . str_replace('wp_', '', $table_name);
+        // Parse full order payload
+        $ledger_data = $payload['ledger'] ?? array();
+        $items_data = $payload['items'] ?? array();
+        $meta_data = $payload['meta'] ?? array();
 
-        // Filter payload để chỉ giữ các cột tồn tại trong bảng
-        $clean_payload = self::filter_columns($payload, $table);
-
-        if (empty($clean_payload)) {
-            return new WP_Error('empty_payload', 'Payload không có cột hợp lệ');
+        if (empty($ledger_data)) {
+            return new WP_Error('empty_payload', 'Missing ledger data');
         }
 
-        switch ($action) {
-            case 'insert':
-                // Check conflict: nếu record_id đã tồn tại → skip (idempotent)
-                $pk = self::get_primary_key($table_name);
-                if ($record_id && isset($clean_payload[$pk])) {
-                    $exists = $wpdb->get_var($wpdb->prepare(
-                        "SELECT COUNT(*) FROM {$table} WHERE {$pk} = %s",
-                        $clean_payload[$pk]
-                    ));
-
-                    if ($exists) {
-                        // Record đã tồn tại → skip, không lỗi (idempotent)
-                        return true;
-                    }
-                }
-
-                $result = $wpdb->insert($table, $clean_payload);
-                break;
-
-            case 'update':
-                // Check conflict: so sánh updated_at
-                $pk = self::get_primary_key($table_name);
-
-                // Lấy updated_at hiện tại ở Hub
-                $hub_updated_at = $wpdb->get_var($wpdb->prepare(
-                    "SELECT updated_at FROM {$table} WHERE {$pk} = %s",
-                    $record_id
-                ));
-
-                // Nếu payload có updated_at và Hub có data mới hơn → conflict
-                if ($hub_updated_at && isset($clean_payload['updated_at'])) {
-                    if (strtotime($clean_payload['updated_at']) < strtotime($hub_updated_at)) {
-                        return new WP_Error('conflict', 'Hub data is newer than Local. Please pull first.', array(
-                            'hub_updated_at' => $hub_updated_at,
-                            'local_updated_at' => $clean_payload['updated_at'],
-                        ));
-                    }
-                }
-
-                $result = $wpdb->update($table, $clean_payload, array($pk => $record_id));
-                break;
-
-            case 'delete':
-                $pk = self::get_primary_key($table_name);
-                $result = $wpdb->update($table, array('is_deleted' => 1, 'deleted_at' => current_time('mysql')), array($pk => $record_id));
-                break;
-
-            default:
-                return new WP_Error('invalid_action', 'Action không hợp lệ');
+        // Check if TGS_POS_Order_Handler exists
+        if (!class_exists('TGS_POS_Order_Handler')) {
+            return new WP_Error('missing_handler', 'TGS_POS_Order_Handler not found - plugin tgs_pos required');
         }
 
-        if ($result === false) {
-            return new WP_Error('db_error', $wpdb->last_error);
+        // Reconstruct order data for create_order()
+        $order_data = array(
+            'sale_code' => $ledger_data['sale_code'] ?? '',
+            'customer_name' => $ledger_data['customer_name'] ?? '',
+            'customer_phone' => $ledger_data['customer_phone'] ?? '',
+            'products_data' => array(),
+            'total' => $ledger_data['total_amount'] ?? 0,
+            'discount' => $ledger_data['discount_amount'] ?? 0,
+            'applied_promotions' => json_decode($ledger_data['applied_promotions'] ?? '[]', true),
+            'payment_plan' => json_decode($meta_data['payment_plan'] ?? '{}', true),
+            'source_type' => $ledger_data['source_type'] ?? 1,
+        );
+
+        // Map items
+        foreach ($items_data as $item) {
+            $order_data['products_data'][] = array(
+                'product_id' => $item['product_id'] ?? 0,
+                'sku' => $item['sku'] ?? '',
+                'quantity' => $item['quantity'] ?? 0,
+                'price' => $item['price'] ?? 0,
+                'unit' => $item['unit'] ?? 'Cái',
+            );
+        }
+
+        // Call TGS_POS create_order()
+        $result = TGS_POS_Order_Handler::create_order($order_data);
+
+        if (is_wp_error($result)) {
+            return $result;
         }
 
         return true;
@@ -300,99 +262,5 @@ class TGS_Hub_Push_Handler {
             array('%d', '%s', '%s', '%d', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s')
         );
     }
-
-    /**
-     * Get primary key của bảng
-     */
-    private static function get_primary_key($table_name) {
-        $map = array(
-            'wp_local_ledger' => 'local_ledger_id',
-            'wp_local_ledger_item' => 'local_ledger_item_id',
-            'wp_local_ledger_person' => 'local_ledger_person_id',
-            'wp_local_ledger_meta' => 'local_ledger_meta_id',
-            'wp_local_viettel_invoice' => 'invoice_id',
-            'wp_local_viettel_invoice_log' => 'log_id',
-            'wp_local_zns_log' => 'id',
-            'wp_local_person_loyalty_logs' => 'log_id',
-            'wp_local_htsoft_import_log' => 'log_id',
-        );
-
-        return $map[$table_name] ?? 'id';
-    }
-
-    /**
-     * Filter payload để chỉ giữ các cột tồn tại trong bảng Hub
-     * Tránh lỗi "Unknown column" khi Local có cột mới Hub chưa có
-     */
-    private static function filter_columns($data, $table_name) {
-        global $wpdb;
-
-        // Lấy danh sách cột của bảng Hub
-        $columns = $wpdb->get_col("DESCRIBE {$table_name}", 0);
-
-        if (empty($columns)) {
-            return array();
-        }
-
-        // Chỉ giữ các key có trong bảng
-        $filtered = array();
-        foreach ($data as $key => $value) {
-            if (in_array($key, $columns)) {
-                $filtered[$key] = $value;
-            }
-        }
-
-        return $filtered;
-    }
-
-    /**
-     * Log conflict vào bảng wp_tgs_sync_conflicts
-     */
-    private static function log_conflict($blog_id, $event_id, $table_name, $record_id, $action, $local_data, $error_data) {
-        global $wpdb;
-        $table = $wpdb->base_prefix . TGS_HUB_TABLE_CONFLICTS;
-
-        // Xác định conflict type
-        $conflict_type = 'update_outdated'; // Default
-        if ($action === 'insert') {
-            $conflict_type = 'insert_duplicate';
-        } elseif ($action === 'delete') {
-            $conflict_type = 'delete_missing';
-        }
-
-        // Lấy data hiện tại ở Hub (nếu có)
-        $hub_data = null;
-        $hub_updated_at = null;
-        if ($record_id && $action !== 'insert') {
-            $pk = self::get_primary_key($table_name);
-            $target_table = $wpdb->prefix . str_replace('wp_', '', $table_name);
-
-            $hub_record = $wpdb->get_row($wpdb->prepare(
-                "SELECT * FROM {$target_table} WHERE {$pk} = %s",
-                $record_id
-            ), ARRAY_A);
-
-            if ($hub_record) {
-                $hub_data = $hub_record;
-                $hub_updated_at = $hub_record['updated_at'] ?? null;
-            }
-        }
-
-        $wpdb->insert(
-            $table,
-            array(
-                'blog_id' => $blog_id,
-                'event_id' => $event_id,
-                'table_name' => $table_name,
-                'record_id' => $record_id,
-                'conflict_type' => $conflict_type,
-                'local_data' => json_encode($local_data, JSON_UNESCAPED_UNICODE),
-                'hub_data' => $hub_data ? json_encode($hub_data, JSON_UNESCAPED_UNICODE) : null,
-                'local_updated_at' => $local_data['updated_at'] ?? null,
-                'hub_updated_at' => $hub_updated_at ?? ($error_data['hub_updated_at'] ?? null),
-                'created_at' => current_time('mysql'),
-            ),
-            array('%d', '%s', '%s', '%d', '%s', '%s', '%s', '%s', '%s', '%s')
-        );
-    }
 }
+

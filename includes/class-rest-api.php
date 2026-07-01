@@ -44,6 +44,12 @@ class TGS_Hub_REST_API {
             'permission_callback' => array(__CLASS__, 'check_client_permission'),
         ));
 
+        register_rest_route(self::NAMESPACE, '/sync/pull-local', array(
+            'methods'  => WP_REST_Server::READABLE,
+            'callback' => array('TGS_Hub_Pull_Handler', 'handle_pull_local'),
+            'permission_callback' => array(__CLASS__, 'check_client_permission'),
+        ));
+
         register_rest_route(self::NAMESPACE, '/sync/ack', array(
             'methods'  => WP_REST_Server::CREATABLE,
             'callback' => array('TGS_Hub_Ack_Handler', 'handle'),
