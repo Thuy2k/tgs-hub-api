@@ -191,16 +191,20 @@ class TGS_Hub_Push_Handler {
     private static function apply_change($table_name, $record_id, $action, $payload) {
         global $wpdb;
 
-        // Chỉ sync các bảng được phép
-        $allowed_tables = array(
-            'wp_local_ledger',
-            'wp_local_ledger_item',
-            'wp_local_ledger_person',
-            'wp_local_ledger_meta',
-        );
+        // Lấy whitelist từ config (các bảng LOCAL cho phép PUSH)
+        $config = TGS_Hub_Schema_Config::get_config();
+        $allowed_tables_config = $config['local_push'] ?? array();
+
+        // Convert từ method name sang table name
+        $allowed_tables = array();
+        foreach ($allowed_tables_config as $method_name) {
+            // sql_local_ledger → wp_local_ledger
+            $table = 'wp_' . str_replace('sql_', '', $method_name);
+            $allowed_tables[] = $table;
+        }
 
         if (!in_array($table_name, $allowed_tables)) {
-            return new WP_Error('forbidden_table', "Bảng {$table_name} không được phép sync");
+            return new WP_Error('forbidden_table', "Bảng {$table_name} không được phép sync (chưa được bật trong Hub Schema Config)");
         }
 
         $table = $wpdb->prefix . str_replace('wp_', '', $table_name);
@@ -306,6 +310,11 @@ class TGS_Hub_Push_Handler {
             'wp_local_ledger_item' => 'local_ledger_item_id',
             'wp_local_ledger_person' => 'local_ledger_person_id',
             'wp_local_ledger_meta' => 'local_ledger_meta_id',
+            'wp_local_viettel_invoice' => 'invoice_id',
+            'wp_local_viettel_invoice_log' => 'log_id',
+            'wp_local_zns_log' => 'id',
+            'wp_local_person_loyalty_logs' => 'log_id',
+            'wp_local_htsoft_import_log' => 'log_id',
         );
 
         return $map[$table_name] ?? 'id';

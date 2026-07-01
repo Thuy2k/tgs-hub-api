@@ -246,7 +246,7 @@ class TGS_Hub_Pull_Schema_Handler {
      * ORDER BY id DESC (mới nhất trước)
      *
      * @param string $table_name Tên bảng
-     * @param string $pk_column Tên cột primary key
+     * @param string $pk_column Tên cột primary key (optional, auto-detect nếu null)
      * @param string|null $since Timestamp cho incremental sync
      * @param int $cursor Cursor hiện tại (id lớn nhất đã lấy)
      * @param int $limit Số records tối đa mỗi batch
@@ -255,12 +255,24 @@ class TGS_Hub_Pull_Schema_Handler {
     private static function fetch_table_batch($table_name, $pk_column, $since, $cursor, $limit) {
         global $wpdb;
 
+        // Auto-detect primary key nếu cột không tồn tại
+        $real_pk = self::get_real_primary_key($table_name, $pk_column);
+
+        if (!$real_pk) {
+            // Không tìm thấy primary key → trả về empty
+            return array(
+                'data' => array(),
+                'next_cursor' => null,
+                'has_more' => false,
+            );
+        }
+
         // Build WHERE clause
         $where_parts = array();
         $prepare_args = array();
 
         // 1. Cursor filter (< cursor để lấy records cũ hơn)
-        $where_parts[] = "{$pk_column} < %d";
+        $where_parts[] = "{$real_pk} < %d";
         $prepare_args[] = $cursor;
 
         // 2. Incremental sync filter (chỉ lấy records thay đổi sau $since)
@@ -279,7 +291,7 @@ class TGS_Hub_Pull_Schema_Handler {
         $query = $wpdb->prepare(
             "SELECT * FROM {$table_name}
              {$where_clause}
-             ORDER BY {$pk_column} DESC
+             ORDER BY {$real_pk} DESC
              LIMIT %d",
             ...$prepare_args
         );
@@ -292,7 +304,7 @@ class TGS_Hub_Pull_Schema_Handler {
 
         if (!empty($results)) {
             $last_record = end($results);
-            $next_cursor = $last_record[$pk_column];
+            $next_cursor = $last_record[$real_pk];
             $has_more = (count($results) == $limit); // Nếu đủ limit thì còn data
         }
 
@@ -301,5 +313,40 @@ class TGS_Hub_Pull_Schema_Handler {
             'next_cursor' => $next_cursor,
             'has_more' => $has_more,
         );
+    }
+
+    /**
+     * Detect primary key thực tế từ bảng
+     *
+     * @param string $table_name Tên bảng
+     * @param string $suggested_pk Tên PK gợi ý (có thể sai)
+     * @return string|null Tên cột PK thực tế, hoặc null nếu không tìm thấy
+     */
+    private static function get_real_primary_key($table_name, $suggested_pk) {
+        global $wpdb;
+
+        // Check suggested PK có tồn tại không
+        $columns = $wpdb->get_col("DESCRIBE {$table_name}", 0);
+
+        if (in_array($suggested_pk, $columns)) {
+            return $suggested_pk;
+        }
+
+        // Không tồn tại → tìm PK thực tế từ SHOW KEYS
+        $keys = $wpdb->get_results("SHOW KEYS FROM {$table_name} WHERE Key_name = 'PRIMARY'", ARRAY_A);
+
+        if (!empty($keys)) {
+            return $keys[0]['Column_name'];
+        }
+
+        // Fallback: tìm cột có AUTO_INCREMENT
+        $auto_inc = $wpdb->get_results("SHOW COLUMNS FROM {$table_name} WHERE Extra LIKE '%auto_increment%'", ARRAY_A);
+
+        if (!empty($auto_inc)) {
+            return $auto_inc[0]['Field'];
+        }
+
+        // Không tìm thấy → return null
+        return null;
     }
 }
