@@ -163,158 +163,65 @@ class TGS_Hub_Pull_Schema_Handler {
      *
      * @param int $blog_id Blog ID (unused, reserved for future filtering)
      * @param string|null $since Timestamp cho incremental sync
-     * @param array $cursors Array of cursors: ['categories' => 123, 'products' => 456, ...]
+     * @param array $cursors Array of cursors: ['table_name' => cursor_value, ...]
      * @return array Data với pagination info
      */
     private static function get_global_data($blog_id, $since = null, $cursors = array()) {
         global $wpdb;
 
-        $limit = 500; // Batch size - tối ưu giữa hiệu suất và tránh timeout
+        $limit = 500;
         $data = array();
 
-        // Default cursors nếu không truyền
-        if (empty($cursors)) {
-            $cursors = array(
-                'categories' => PHP_INT_MAX,
-                'products' => PHP_INT_MAX,
-                'policies' => PHP_INT_MAX,
-                'policy_items' => PHP_INT_MAX,
-                'lots' => PHP_INT_MAX,
-                'suppliers' => PHP_INT_MAX,
-                'purchase_policies' => PHP_INT_MAX,
-                'purchase_policy_items' => PHP_INT_MAX,
-            );
+        // Lấy danh sách tables từ Registry
+        $tables = TGS_Hub_Table_Registry::get_global_tables();
+
+        // Init cursors nếu chưa có
+        foreach ($tables as $table_name => $pk) {
+            if (!isset($cursors[$table_name])) {
+                $cursors[$table_name] = PHP_INT_MAX;
+            }
         }
 
-        // 1. Lấy danh mục sản phẩm (mới nhất trước)
-        $cat_result = self::fetch_table_batch(
-            'wp_global_product_cat',
-            'global_product_cat_id',
-            $since,
-            $cursors['categories'],
-            $limit
-        );
-        $data['categories'] = $cat_result['data'];
-        $data['cursor_cat_next'] = $cat_result['next_cursor'];
-        $data['has_more_categories'] = $cat_result['has_more'];
+        // Fetch từng bảng
+        $has_more_any = false;
+        foreach ($tables as $table_name => $pk) {
+            $result = self::fetch_table_batch(
+                $table_name,
+                $pk,
+                $since,
+                $cursors[$table_name],
+                $limit
+            );
 
-        // 2. Lấy sản phẩm (mới nhất trước)
-        $product_result = self::fetch_table_batch(
-            'wp_global_product_name',
-            'global_product_name_id',
-            $since,
-            $cursors['products'],
-            $limit
-        );
-        $data['products'] = $product_result['data'];
-        $data['cursor_product_next'] = $product_result['next_cursor'];
-        $data['has_more_products'] = $product_result['has_more'];
+            // Store data với key = table name (bỏ prefix wp_)
+            $key = str_replace('wp_global_', '', $table_name);
+            $data[$key] = $result['data'];
+            $data["cursor_{$key}_next"] = $result['next_cursor'];
+            $data["has_more_{$key}"] = $result['has_more'];
 
-        // 3. Lấy chính sách bán hàng (mới nhất trước)
-        $policy_result = self::fetch_table_batch(
-            'wp_global_selling_policy',
-            'selling_policy_id',
-            $since,
-            $cursors['policies'],
-            $limit
-        );
-        $data['selling_policies'] = $policy_result['data'];
-        $data['cursor_policy_next'] = $policy_result['next_cursor'];
-        $data['has_more_policies'] = $policy_result['has_more'];
+            if ($result['has_more']) {
+                $has_more_any = true;
+            }
+        }
 
-        // 4. Lấy chi tiết chính sách bán hàng (mới nhất trước)
-        $policy_items_result = self::fetch_table_batch(
-            'wp_global_selling_policy_items',
-            'sp_item_id',
-            $since,
-            $cursors['policy_items'],
-            $limit
-        );
-        $data['selling_policy_items'] = $policy_items_result['data'];
-        $data['cursor_policy_items_next'] = $policy_items_result['next_cursor'];
-        $data['has_more_policy_items'] = $policy_items_result['has_more'];
-
-        // 5. Lấy lô hàng (mới nhất trước)
-        $lot_result = self::fetch_table_batch(
-            'wp_global_product_lots',
-            'global_product_lot_id',
-            $since,
-            $cursors['lots'],
-            $limit
-        );
-        $data['product_lots'] = $lot_result['data'];
-        $data['cursor_lot_next'] = $lot_result['next_cursor'];
-        $data['has_more_lots'] = $lot_result['has_more'];
-
-        // 6. Lấy nhà cung cấp
-        $supplier_result = self::fetch_table_batch(
-            'wp_global_supplier',
-            'supplier_id',
-            $since,
-            $cursors['suppliers'],
-            $limit
-        );
-        $data['suppliers'] = $supplier_result['data'];
-        $data['cursor_suppliers_next'] = $supplier_result['next_cursor'];
-        $data['has_more_suppliers'] = $supplier_result['has_more'];
-
-        // 7. Lấy chính sách mua hàng
-        $purchase_policy_result = self::fetch_table_batch(
-            'wp_global_purchase_policy',
-            'purchase_policy_id',
-            $since,
-            $cursors['purchase_policies'],
-            $limit
-        );
-        $data['purchase_policies'] = $purchase_policy_result['data'];
-        $data['cursor_purchase_policies_next'] = $purchase_policy_result['next_cursor'];
-        $data['has_more_purchase_policies'] = $purchase_policy_result['has_more'];
-
-        // 8. Lấy chi tiết chính sách mua hàng
-        $purchase_policy_items_result = self::fetch_table_batch(
-            'wp_global_purchase_policy_item',
-            'pp_item_id',
-            $since,
-            $cursors['purchase_policy_items'],
-            $limit
-        );
-        $data['purchase_policy_items'] = $purchase_policy_items_result['data'];
-        $data['cursor_purchase_policy_items_next'] = $purchase_policy_items_result['next_cursor'];
-        $data['has_more_purchase_policy_items'] = $purchase_policy_items_result['has_more'];
-
-        // Thống kê
+        // Summary
         $data['summary'] = array(
-            'batch_categories' => count($data['categories']),
-            'batch_products' => count($data['products']),
-            'batch_policies' => count($data['selling_policies']),
-            'batch_policy_items' => count($data['selling_policy_items']),
-            'batch_lots' => count($data['product_lots']),
-            'batch_suppliers' => count($data['suppliers']),
-            'batch_purchase_policies' => count($data['purchase_policies']),
-            'batch_purchase_policy_items' => count($data['purchase_policy_items']),
             'since' => $since,
             'is_incremental' => !empty($since),
-            'has_more' => $cat_result['has_more'] || $product_result['has_more'] ||
-                          $policy_result['has_more'] || $policy_items_result['has_more'] ||
-                          $lot_result['has_more'] || $supplier_result['has_more'] ||
-                          $purchase_policy_result['has_more'] || $purchase_policy_items_result['has_more'],
+            'has_more' => $has_more_any,
         );
 
         return $data;
     }
 
     /**
-     * Lấy dữ liệu LOCAL từ multisite blog đã kết nối
-     *
-     * @param int $blog_id Blog ID của shop đang kết nối
-     * @param string|null $since Timestamp cho incremental sync
-     * @return array Data từ các bảng LOCAL
+     * Lấy dữ liệu LOCAL từ multisite blog
      */
     private static function get_local_data($blog_id, $since = null) {
         global $wpdb;
 
         $data = array();
-        $limit = 500; // Batch size
+        $limit = 500;
 
         // Lấy config bảng LOCAL nào được phép PULL
         $config = TGS_Hub_Schema_Config::get_config();

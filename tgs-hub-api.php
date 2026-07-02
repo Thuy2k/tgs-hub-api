@@ -53,6 +53,7 @@ class TGS_Hub_API {
     private function includes() {
         // Core classes
         require_once TGS_HUB_API_PLUGIN_DIR . 'includes/class-database.php';
+        require_once TGS_HUB_API_PLUGIN_DIR . 'includes/class-hub-table-registry.php';
         require_once TGS_HUB_API_PLUGIN_DIR . 'includes/class-rest-api.php';
         require_once TGS_HUB_API_PLUGIN_DIR . 'includes/class-auth-handler.php';
         require_once TGS_HUB_API_PLUGIN_DIR . 'includes/class-push-handler.php';
