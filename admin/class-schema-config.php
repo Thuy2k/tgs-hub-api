@@ -141,10 +141,89 @@ class TGS_Hub_Schema_Config {
     }
 
     /**
+     * Get schema definition from TGS_Shop_Database class (source of truth)
+     *
+     * Thay vì query database thật, lấy schema từ file class-tgs-database.php
+     * để tránh lỗi "Table not exists" khi bảng chưa được tạo.
+     */
+    private static function get_schema_from_class() {
+        // Include TGS_Shop_Database class nếu chưa có
+        $db_class_file = WP_PLUGIN_DIR . '/tgs_shop_management/database/class-tgs-database.php';
+        if (!class_exists('TGS_Shop_Database') && file_exists($db_class_file)) {
+            require_once($db_class_file);
+        }
+
+        // Nếu không tìm thấy class, fallback về schema hard-coded
+        if (!class_exists('TGS_Shop_Database')) {
+            return self::get_fallback_schema();
+        }
+
+        // Parse class methods để lấy schema
+        $reflection = new ReflectionClass('TGS_Shop_Database');
+        $methods = $reflection->getMethods(ReflectionMethod::IS_STATIC | ReflectionMethod::IS_PRIVATE);
+
+        $schema = array();
+        foreach ($methods as $method) {
+            $name = $method->getName();
+            if (strpos($name, 'sql_') !== 0) {
+                continue;
+            }
+
+            // Call method to get CREATE TABLE SQL
+            $method->setAccessible(true);
+            try {
+                $sql = $method->invoke(null, '');
+
+                // Parse SQL to check for updated_at and deleted_at
+                $has_updated = (stripos($sql, 'updated_at') !== false);
+                $has_deleted = (stripos($sql, 'deleted_at') !== false);
+
+                $schema[$name] = array(
+                    'updated_at' => $has_updated,
+                    'deleted_at' => $has_deleted,
+                );
+            } catch (Exception $e) {
+                // Skip methods that can't be invoked
+                continue;
+            }
+        }
+
+        return $schema;
+    }
+
+    /**
+     * Fallback schema definition (hard-coded from class-tgs-database.php)
+     * Dùng khi không tìm thấy TGS_Shop_Database class
+     */
+    private static function get_fallback_schema() {
+        return array(
+            'sql_local_ledger_meta' => array('updated_at' => true, 'deleted_at' => true),
+            'sql_local_ledger_person' => array('updated_at' => true, 'deleted_at' => true),
+            'sql_local_ledger' => array('updated_at' => true, 'deleted_at' => true),
+            'sql_local_ledger_item' => array('updated_at' => true, 'deleted_at' => true),
+            'sql_global_product_name' => array('updated_at' => true, 'deleted_at' => true),
+            'sql_global_product_cat' => array('updated_at' => true, 'deleted_at' => true),
+            'sql_global_product_lots' => array('updated_at' => true, 'deleted_at' => true),
+            'sql_global_selling_policy' => array('updated_at' => true, 'deleted_at' => true),
+            'sql_global_selling_policy_items' => array('updated_at' => true, 'deleted_at' => false),
+            'sql_global_purchase_policy' => array('updated_at' => true, 'deleted_at' => true),
+            'sql_global_purchase_policy_item' => array('updated_at' => true, 'deleted_at' => true),
+            'sql_global_supplier' => array('updated_at' => true, 'deleted_at' => true),
+            'sql_local_viettel_invoice' => array('updated_at' => true, 'deleted_at' => false),
+            'sql_local_viettel_invoice_log' => array('updated_at' => false, 'deleted_at' => false),
+            'sql_local_zns_log' => array('updated_at' => false, 'deleted_at' => false),
+            'sql_local_person_loyalty_logs' => array('updated_at' => true, 'deleted_at' => true),
+            'sql_local_htsoft_import_log' => array('updated_at' => true, 'deleted_at' => true),
+            'sql_global_loyalty_log' => array('updated_at' => false, 'deleted_at' => false),
+            'sql_global_loyalty_policy' => array('updated_at' => true, 'deleted_at' => false),
+        );
+    }
+
+    /**
      * Get available GLOBAL tables
      */
     private static function get_available_global_tables() {
-        global $wpdb;
+        $schema = self::get_schema_from_class();
 
         $tables = array(
             'sql_global_product_name' => array(
@@ -181,11 +260,23 @@ class TGS_Hub_Schema_Config {
             ),
         );
 
-        // Validate từng bảng: check có updated_at và deleted_at không
+        // Validate từng bảng dựa trên schema từ class-tgs-database.php
         foreach ($tables as $key => $info) {
-            $validation = self::validate_table_columns($info['table']);
-            $tables[$key]['has_sync_columns'] = $validation['valid'];
-            $tables[$key]['missing_columns'] = $validation['missing'];
+            if (isset($schema[$key])) {
+                $has_updated = $schema[$key]['updated_at'];
+                $has_deleted = $schema[$key]['deleted_at'];
+
+                $missing = array();
+                if (!$has_updated) $missing[] = 'updated_at';
+                if (!$has_deleted) $missing[] = 'deleted_at';
+
+                $tables[$key]['has_sync_columns'] = empty($missing);
+                $tables[$key]['missing_columns'] = $missing;
+            } else {
+                // Bảng không tìm thấy trong class-tgs-database.php
+                $tables[$key]['has_sync_columns'] = false;
+                $tables[$key]['missing_columns'] = array('deleted_at (not defined in class-tgs-database.php)');
+            }
         }
 
         return $tables;
@@ -195,7 +286,7 @@ class TGS_Hub_Schema_Config {
      * Get available LOCAL tables
      */
     private static function get_available_local_tables() {
-        global $wpdb;
+        $schema = self::get_schema_from_class();
 
         $tables = array(
             'sql_local_ledger_person' => array(
@@ -244,49 +335,26 @@ class TGS_Hub_Schema_Config {
             ),
         );
 
-        // Validate từng bảng LOCAL (dùng blog_id = 2 làm sample)
+        // Validate từng bảng LOCAL dựa trên schema từ class-tgs-database.php
         foreach ($tables as $key => $info) {
-            $blog_prefix = $wpdb->get_blog_prefix(2); // Sample blog 2
-            $full_table = $blog_prefix . $info['table'];
-            $validation = self::validate_table_columns($full_table);
-            $tables[$key]['has_sync_columns'] = $validation['valid'];
-            $tables[$key]['missing_columns'] = $validation['missing'];
-        }
+            if (isset($schema[$key])) {
+                $has_updated = $schema[$key]['updated_at'];
+                $has_deleted = $schema[$key]['deleted_at'];
 
-        return $tables;
-    }
+                $missing = array();
+                if (!$has_updated) $missing[] = 'updated_at';
+                if (!$has_deleted) $missing[] = 'deleted_at';
 
-    /**
-     * Validate bảng có updated_at và deleted_at không
-     */
-    private static function validate_table_columns($table_name) {
-        global $wpdb;
-
-        // Check bảng tồn tại
-        $exists = $wpdb->get_var($wpdb->prepare("SHOW TABLES LIKE %s", $table_name));
-        if (!$exists) {
-            return array(
-                'valid' => false,
-                'missing' => array('Table not exists'),
-            );
-        }
-
-        // Lấy danh sách cột
-        $columns = $wpdb->get_col("DESCRIBE {$table_name}", 0);
-
-        $required = array('updated_at', 'deleted_at');
-        $missing = array();
-
-        foreach ($required as $col) {
-            if (!in_array($col, $columns)) {
-                $missing[] = $col;
+                $tables[$key]['has_sync_columns'] = empty($missing);
+                $tables[$key]['missing_columns'] = $missing;
+            } else {
+                // Bảng không tìm thấy trong class-tgs-database.php
+                $tables[$key]['has_sync_columns'] = false;
+                $tables[$key]['missing_columns'] = array('deleted_at (not defined in class-tgs-database.php)');
             }
         }
 
-        return array(
-            'valid' => empty($missing),
-            'missing' => $missing,
-        );
+        return $tables;
     }
 
     /**
