@@ -32,7 +32,12 @@ class TGS_Hub_Pull_Handler {
         $allowed_tables = array(
             'wp_global_product_name',
             'wp_global_product_cat',
+            'wp_global_product_lots',
             'wp_global_selling_policy',
+            'wp_global_selling_policy_items',
+            'wp_global_purchase_policy',
+            'wp_global_purchase_policy_item',
+            'wp_global_supplier',
         );
 
         $tables_to_pull = !empty($tables) ? explode(',', $tables) : $allowed_tables;
@@ -87,7 +92,12 @@ class TGS_Hub_Pull_Handler {
         $table_map = array(
             'wp_global_product_name' => $wpdb->base_prefix . 'global_product_name',
             'wp_global_product_cat' => $wpdb->base_prefix . 'global_product_cat',
+            'wp_global_product_lots' => $wpdb->base_prefix . 'global_product_lots',
             'wp_global_selling_policy' => $wpdb->base_prefix . 'global_selling_policy',
+            'wp_global_selling_policy_items' => $wpdb->base_prefix . 'global_selling_policy_items',
+            'wp_global_purchase_policy' => $wpdb->base_prefix . 'global_purchase_policy',
+            'wp_global_purchase_policy_item' => $wpdb->base_prefix . 'global_purchase_policy_item',
+            'wp_global_supplier' => $wpdb->base_prefix . 'global_supplier',
         );
 
         $table = $table_map[$table_name] ?? null;
@@ -110,9 +120,14 @@ class TGS_Hub_Pull_Handler {
      */
     private static function get_primary_key($table_name) {
         $map = array(
-            'wp_global_product_name' => 'product_id',
-            'wp_global_product_cat' => 'cat_id',
-            'wp_global_selling_policy' => 'policy_id',
+            'wp_global_product_name' => 'global_product_name_id',
+            'wp_global_product_cat' => 'global_product_cat_id',
+            'wp_global_product_lots' => 'global_product_lot_id',
+            'wp_global_selling_policy' => 'selling_policy_id',
+            'wp_global_selling_policy_items' => 'sp_item_id',
+            'wp_global_purchase_policy' => 'purchase_policy_id',
+            'wp_global_purchase_policy_item' => 'pp_item_id',
+            'wp_global_supplier' => 'supplier_id',
             'wp_local_ledger' => 'local_ledger_id',
             'wp_local_ledger_item' => 'local_ledger_item_id',
             'wp_local_ledger_meta' => 'local_ledger_meta_id',
