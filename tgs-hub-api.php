@@ -72,6 +72,9 @@ class TGS_Hub_API {
             require_once TGS_HUB_API_PLUGIN_DIR . 'admin/class-client-dashboard.php';
             require_once TGS_HUB_API_PLUGIN_DIR . 'admin/class-sync-monitor.php';
             require_once TGS_HUB_API_PLUGIN_DIR . 'admin/class-conflict-resolver.php';
+
+            // Test Schema V2
+            require_once TGS_HUB_API_PLUGIN_DIR . 'test-schema-v2.php';
         }
     }
 
