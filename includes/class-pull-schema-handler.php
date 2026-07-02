@@ -387,48 +387,65 @@ class TGS_Hub_Pull_Schema_Handler {
         $where_parts = array();
         $prepare_args = array();
 
-        // Incremental sync: chỉ lấy records thay đổi sau $since (không dùng cursor)
         if ($since) {
+            // INCREMENTAL SYNC: Lấy HẾT records có updated_at > $since hoặc deleted_at > $since
+            // KHÔNG dùng cursor, KHÔNG phân trang - đơn giản hơn nhiều!
             $where_parts[] = "(updated_at > %s OR deleted_at > %s)";
             $prepare_args[] = $since;
             $prepare_args[] = $since;
+
+            // Query incremental - lấy hết, không limit
+            $query = $wpdb->prepare(
+                "SELECT * FROM {$table_name}
+                 WHERE " . implode(' AND ', $where_parts) . "
+                 ORDER BY {$real_pk} DESC",
+                ...$prepare_args
+            );
+
+            error_log("[Hub] INCREMENTAL QUERY for {$table_name}: {$query}");
+            error_log("[Hub] Since timestamp: {$since}");
+
+            $results = $wpdb->get_results($query, ARRAY_A);
+
+            error_log("[Hub] INCREMENTAL fetched " . count($results) . " records from {$table_name}");
+
+            return array(
+                'data' => $results ?: array(),
+                'next_cursor' => null,
+                'has_more' => false, // Incremental lấy hết trong 1 lần
+            );
         } else {
-            // Full sync: dùng cursor để phân trang
+            // FULL SYNC: Dùng cursor để phân trang (vì data nhiều)
             $where_parts[] = "{$real_pk} < %d";
             $prepare_args[] = $cursor;
+            $prepare_args[] = $limit;
+
+            $query = $wpdb->prepare(
+                "SELECT * FROM {$table_name}
+                 WHERE " . implode(' AND ', $where_parts) . "
+                 ORDER BY {$real_pk} DESC
+                 LIMIT %d",
+                ...$prepare_args
+            );
+
+            $results = $wpdb->get_results($query, ARRAY_A);
+
+            // Tính next_cursor và has_more
+            $next_cursor = null;
+            $has_more = false;
+
+            if (!empty($results)) {
+                $last_record = end($results);
+                $next_cursor = $last_record[$real_pk];
+                $has_more = (count($results) == $limit); // Nếu đủ limit thì còn data
+            }
+
+            return array(
+                'data' => $results ?: array(),
+                'next_cursor' => $next_cursor,
+                'has_more' => $has_more,
+            );
         }
-
-        $where_clause = 'WHERE ' . implode(' AND ', $where_parts);
-
-        // 3. Thêm LIMIT
-        $prepare_args[] = $limit;
-
-        // Query
-        $query = $wpdb->prepare(
-            "SELECT * FROM {$table_name}
-             {$where_clause}
-             ORDER BY {$real_pk} DESC
-             LIMIT %d",
-            ...$prepare_args
-        );
-
-        $results = $wpdb->get_results($query, ARRAY_A);
-
-        // Tính next_cursor và has_more
-        $next_cursor = null;
-        $has_more = false;
-
-        if (!empty($results)) {
-            $last_record = end($results);
-            $next_cursor = $last_record[$real_pk];
-            $has_more = (count($results) == $limit); // Nếu đủ limit thì còn data
-        }
-
-        return array(
-            'data' => $results ?: array(),
-            'next_cursor' => $next_cursor,
-            'has_more' => $has_more,
-        );
     }
 
     /**
