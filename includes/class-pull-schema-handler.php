@@ -23,25 +23,6 @@ class TGS_Hub_Pull_Schema_Handler {
         // Lấy timestamp cho incremental sync
         $since = $request->get_param('since');
 
-        // Lấy cursors cho từng bảng (pagination)
-        $cursors = array(
-            'categories' => $request->get_param('cursor_cat') ?? PHP_INT_MAX,
-            'products' => $request->get_param('cursor_product') ?? PHP_INT_MAX,
-            'policies' => $request->get_param('cursor_policy') ?? PHP_INT_MAX,
-            'lots' => $request->get_param('cursor_lot') ?? PHP_INT_MAX,
-        );
-
-        // Parse thêm dynamic cursors (cursor_product_name, cursor_selling_policy_items, etc.)
-        foreach ($request->get_params() as $key => $value) {
-            if (strpos($key, 'cursor_') === 0 && !isset($cursors[$key])) {
-                // cursor_product_name -> product_name
-                $table_key = str_replace('cursor_', '', $key);
-                $cursors[$table_key] = $value;
-            }
-        }
-
-        error_log('[Hub] Received cursors: ' . print_r($cursors, true));
-
         // Lấy danh sách bảng được chọn (optional - nếu không có thì fetch all)
         $selected_tables = $request->get_param('selected_tables');
         if ($selected_tables && is_string($selected_tables)) {
@@ -222,11 +203,9 @@ class TGS_Hub_Pull_Schema_Handler {
                 // Nếu table này trong danh sách fetch, lưu cursor
                 if (isset($tables[$table_name])) {
                     $normalized_cursors[$table_name] = intval($value);
-                    error_log("[Hub] Parsed cursor: {$param_key} = {$value} -> {$table_name} = " . intval($value));
                 }
             }
         }
-        error_log('[Hub] Final normalized cursors: ' . print_r($normalized_cursors, true));
 
         // Init cursors nếu chưa có
         foreach ($tables as $table_name => $pk) {
@@ -257,8 +236,6 @@ class TGS_Hub_Pull_Schema_Handler {
 
             $data["cursor_{$key}_next"] = $result['next_cursor'];
             $data["has_more_{$key}"] = $result['has_more'];
-
-            error_log("[Hub] Table {$table_name}: fetched " . count($result['data']) . " records, has_more={$result['has_more']}, next_cursor={$result['next_cursor']}");
 
             if ($result['has_more']) {
                 $has_more_any = true;
@@ -402,12 +379,7 @@ class TGS_Hub_Pull_Schema_Handler {
                 ...$prepare_args
             );
 
-            error_log("[Hub] INCREMENTAL QUERY for {$table_name}: {$query}");
-            error_log("[Hub] Since timestamp: {$since}");
-
             $results = $wpdb->get_results($query, ARRAY_A);
-
-            error_log("[Hub] INCREMENTAL fetched " . count($results) . " records from {$table_name}");
 
             return array(
                 'data' => $results ?: array(),
