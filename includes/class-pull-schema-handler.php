@@ -15,7 +15,7 @@ class TGS_Hub_Pull_Schema_Handler {
 
     /**
      * Handle pull schema request
-     * GET /tgs-hub/v1/sync/pull-schema?since=2026-07-01 06:00:00&cursor_cat=123&cursor_product=456...
+     * GET /tgs-hub/v1/sync/pull-schema?since=2026-07-01 06:00:00&cursor_cat=123&selected_tables=categories,policy_items
      */
     public static function handle($request) {
         $client = $request->get_param('_tgs_client');
@@ -31,11 +31,19 @@ class TGS_Hub_Pull_Schema_Handler {
             'lots' => $request->get_param('cursor_lot') ?? PHP_INT_MAX,
         );
 
+        // Lấy danh sách bảng được chọn (optional - nếu không có thì fetch all)
+        $selected_tables = $request->get_param('selected_tables');
+        if ($selected_tables && is_string($selected_tables)) {
+            $selected_tables = explode(',', $selected_tables);
+        } else {
+            $selected_tables = null; // null = fetch all
+        }
+
         // Lấy SQL statements từ DB thực tế (GLOBAL từ Hub, LOCAL từ blog)
         $sql_statements = self::extract_sql_from_database_class($client['blog_id']);
 
-        // Lấy dữ liệu GLOBAL cần pull về (incremental nếu có $since, paginated)
-        $global_data = self::get_global_data($client['blog_id'], $since, $cursors);
+        // Lấy dữ liệu GLOBAL cần pull về (chỉ fetch bảng được chọn)
+        $global_data = self::get_global_data($client['blog_id'], $since, $cursors, $selected_tables);
 
         // Lấy dữ liệu LOCAL từ blog multisite đã kết nối
         $local_data = self::get_local_data($client['blog_id'], $since);
@@ -164,9 +172,10 @@ class TGS_Hub_Pull_Schema_Handler {
      * @param int $blog_id Blog ID (unused, reserved for future filtering)
      * @param string|null $since Timestamp cho incremental sync
      * @param array $cursors Array of cursors: ['table_name' => cursor_value, ...]
+     * @param array|null $selected_tables Danh sách key bảng được chọn (null = fetch all)
      * @return array Data với pagination info
      */
-    private static function get_global_data($blog_id, $since = null, $cursors = array()) {
+    private static function get_global_data($blog_id, $since = null, $cursors = array(), $selected_tables = null) {
         global $wpdb;
 
         $limit = 500;
@@ -175,10 +184,43 @@ class TGS_Hub_Pull_Schema_Handler {
         // Lấy danh sách tables từ Registry
         $tables = TGS_Hub_Table_Registry::get_global_tables();
 
+        // Filter theo bảng được chọn (nếu có)
+        if ($selected_tables !== null && is_array($selected_tables)) {
+            $filtered_tables = array();
+            foreach ($tables as $table_name => $pk) {
+                // Convert table name -> key (wp_global_product_cat -> product_cat)
+                $key = str_replace('wp_global_', '', $table_name);
+
+                // Check nếu key này được chọn
+                if (in_array($key, $selected_tables)) {
+                    $filtered_tables[$table_name] = $pk;
+                }
+            }
+            $tables = $filtered_tables;
+        }
+
+        // Convert old cursor format (categories, products) -> table names (wp_global_product_cat)
+        $legacy_map = array(
+            'categories' => 'wp_global_product_cat',
+            'products' => 'wp_global_product_name',
+            'policies' => 'wp_global_selling_policy',
+            'policy_items' => 'wp_global_selling_policy_items',
+            'lots' => 'wp_global_product_lots',
+            'suppliers' => 'wp_global_supplier',
+            'purchase_policies' => 'wp_global_purchase_policy',
+            'purchase_policy_items' => 'wp_global_purchase_policy_item',
+        );
+
+        $normalized_cursors = array();
+        foreach ($cursors as $key => $value) {
+            $table_name = $legacy_map[$key] ?? $key;
+            $normalized_cursors[$table_name] = $value;
+        }
+
         // Init cursors nếu chưa có
         foreach ($tables as $table_name => $pk) {
-            if (!isset($cursors[$table_name])) {
-                $cursors[$table_name] = PHP_INT_MAX;
+            if (!isset($normalized_cursors[$table_name])) {
+                $normalized_cursors[$table_name] = PHP_INT_MAX;
             }
         }
 
@@ -189,7 +231,7 @@ class TGS_Hub_Pull_Schema_Handler {
                 $table_name,
                 $pk,
                 $since,
-                $cursors[$table_name],
+                $normalized_cursors[$table_name],
                 $limit
             );
 
