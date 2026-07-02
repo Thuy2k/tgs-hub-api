@@ -31,6 +31,17 @@ class TGS_Hub_Pull_Schema_Handler {
             'lots' => $request->get_param('cursor_lot') ?? PHP_INT_MAX,
         );
 
+        // Parse thêm dynamic cursors (cursor_product_name, cursor_selling_policy_items, etc.)
+        foreach ($request->get_params() as $key => $value) {
+            if (strpos($key, 'cursor_') === 0 && !isset($cursors[$key])) {
+                // cursor_product_name -> product_name
+                $table_key = str_replace('cursor_', '', $key);
+                $cursors[$table_key] = $value;
+            }
+        }
+
+        error_log('[Hub] Received cursors: ' . print_r($cursors, true));
+
         // Lấy danh sách bảng được chọn (optional - nếu không có thì fetch all)
         $selected_tables = $request->get_param('selected_tables');
         if ($selected_tables && is_string($selected_tables)) {
@@ -43,7 +54,7 @@ class TGS_Hub_Pull_Schema_Handler {
         $sql_statements = self::extract_sql_from_database_class($client['blog_id']);
 
         // Lấy dữ liệu GLOBAL cần pull về (chỉ fetch bảng được chọn)
-        $global_data = self::get_global_data($client['blog_id'], $since, $cursors, $selected_tables);
+        $global_data = self::get_global_data($request, $client['blog_id'], $since, $cursors, $selected_tables);
 
         // Lấy dữ liệu LOCAL từ blog multisite đã kết nối
         $local_data = self::get_local_data($client['blog_id'], $since);
@@ -169,13 +180,14 @@ class TGS_Hub_Pull_Schema_Handler {
      * Lấy dữ liệu GLOBAL từ Hub để đẩy về Local
      * Hỗ trợ incremental sync với timestamp + cursor-based pagination
      *
+     * @param WP_REST_Request $request Request object
      * @param int $blog_id Blog ID (unused, reserved for future filtering)
      * @param string|null $since Timestamp cho incremental sync
      * @param array $cursors Array of cursors: ['table_name' => cursor_value, ...]
      * @param array|null $selected_tables Danh sách key bảng được chọn (null = fetch all)
      * @return array Data với pagination info
      */
-    private static function get_global_data($blog_id, $since = null, $cursors = array(), $selected_tables = null) {
+    private static function get_global_data($request, $blog_id, $since = null, $cursors = array(), $selected_tables = null) {
         global $wpdb;
 
         $limit = 500;
@@ -199,23 +211,22 @@ class TGS_Hub_Pull_Schema_Handler {
             $tables = $filtered_tables;
         }
 
-        // Convert old cursor format (categories, products) -> table names (wp_global_product_cat)
-        $legacy_map = array(
-            'categories' => 'wp_global_product_cat',
-            'products' => 'wp_global_product_name',
-            'policies' => 'wp_global_selling_policy',
-            'policy_items' => 'wp_global_selling_policy_items',
-            'lots' => 'wp_global_product_lots',
-            'suppliers' => 'wp_global_supplier',
-            'purchase_policies' => 'wp_global_purchase_policy',
-            'purchase_policy_items' => 'wp_global_purchase_policy_item',
-        );
-
+        // Parse cursors trực tiếp từ query params - dùng table name làm key
         $normalized_cursors = array();
-        foreach ($cursors as $key => $value) {
-            $table_name = $legacy_map[$key] ?? $key;
-            $normalized_cursors[$table_name] = $value;
+        foreach ($request->get_params() as $param_key => $value) {
+            if (strpos($param_key, 'cursor_') === 0) {
+                // cursor_product_name -> wp_global_product_name
+                $key = str_replace('cursor_', '', $param_key);
+                $table_name = 'wp_global_' . $key;
+
+                // Nếu table này trong danh sách fetch, lưu cursor
+                if (isset($tables[$table_name])) {
+                    $normalized_cursors[$table_name] = intval($value);
+                    error_log("[Hub] Parsed cursor: {$param_key} = {$value} -> {$table_name} = " . intval($value));
+                }
+            }
         }
+        error_log('[Hub] Final normalized cursors: ' . print_r($normalized_cursors, true));
 
         // Init cursors nếu chưa có
         foreach ($tables as $table_name => $pk) {
@@ -237,9 +248,17 @@ class TGS_Hub_Pull_Schema_Handler {
 
             // Store data với key = table name (bỏ prefix wp_)
             $key = str_replace('wp_global_', '', $table_name);
-            $data[$key] = $result['data'];
+
+            // APPEND data thay vì ghi đè (cho trường hợp multi-batch)
+            if (!isset($data[$key])) {
+                $data[$key] = array();
+            }
+            $data[$key] = array_merge($data[$key], $result['data']);
+
             $data["cursor_{$key}_next"] = $result['next_cursor'];
             $data["has_more_{$key}"] = $result['has_more'];
+
+            error_log("[Hub] Table {$table_name}: fetched " . count($result['data']) . " records, has_more={$result['has_more']}, next_cursor={$result['next_cursor']}");
 
             if ($result['has_more']) {
                 $has_more_any = true;
@@ -335,14 +354,6 @@ class TGS_Hub_Pull_Schema_Handler {
             'blog_id' => $blog_id,
         );
 
-        // Debug log
-        error_log('Hub get_local_data for blog_id=' . $blog_id . ': ' . $total_records . ' records');
-        foreach ($data as $table => $records) {
-            if ($table !== 'summary' && is_array($records)) {
-                error_log('  - ' . $table . ': ' . count($records) . ' records');
-            }
-        }
-
         return $data;
     }
 
@@ -376,15 +387,15 @@ class TGS_Hub_Pull_Schema_Handler {
         $where_parts = array();
         $prepare_args = array();
 
-        // 1. Cursor filter (< cursor để lấy records cũ hơn)
-        $where_parts[] = "{$real_pk} < %d";
-        $prepare_args[] = $cursor;
-
-        // 2. Incremental sync filter (chỉ lấy records thay đổi sau $since)
+        // Incremental sync: chỉ lấy records thay đổi sau $since (không dùng cursor)
         if ($since) {
             $where_parts[] = "(updated_at > %s OR deleted_at > %s)";
             $prepare_args[] = $since;
             $prepare_args[] = $since;
+        } else {
+            // Full sync: dùng cursor để phân trang
+            $where_parts[] = "{$real_pk} < %d";
+            $prepare_args[] = $cursor;
         }
 
         $where_clause = 'WHERE ' . implode(' AND ', $where_parts);
