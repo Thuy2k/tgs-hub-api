@@ -178,7 +178,11 @@ class TGS_Hub_Pull_Schema_Handler {
                 'categories' => PHP_INT_MAX,
                 'products' => PHP_INT_MAX,
                 'policies' => PHP_INT_MAX,
+                'policy_items' => PHP_INT_MAX,
                 'lots' => PHP_INT_MAX,
+                'suppliers' => PHP_INT_MAX,
+                'purchase_policies' => PHP_INT_MAX,
+                'purchase_policy_items' => PHP_INT_MAX,
             );
         }
 
@@ -209,7 +213,7 @@ class TGS_Hub_Pull_Schema_Handler {
         // 3. Lấy chính sách bán hàng (mới nhất trước)
         $policy_result = self::fetch_table_batch(
             'wp_global_selling_policy',
-            'global_selling_policy_id',
+            'selling_policy_id',
             $since,
             $cursors['policies'],
             $limit
@@ -218,10 +222,22 @@ class TGS_Hub_Pull_Schema_Handler {
         $data['cursor_policy_next'] = $policy_result['next_cursor'];
         $data['has_more_policies'] = $policy_result['has_more'];
 
-        // 4. Lấy lô hàng (mới nhất trước)
+        // 4. Lấy chi tiết chính sách bán hàng (mới nhất trước)
+        $policy_items_result = self::fetch_table_batch(
+            'wp_global_selling_policy_items',
+            'sp_item_id',
+            $since,
+            $cursors['policy_items'],
+            $limit
+        );
+        $data['selling_policy_items'] = $policy_items_result['data'];
+        $data['cursor_policy_items_next'] = $policy_items_result['next_cursor'];
+        $data['has_more_policy_items'] = $policy_items_result['has_more'];
+
+        // 5. Lấy lô hàng (mới nhất trước)
         $lot_result = self::fetch_table_batch(
             'wp_global_product_lots',
-            'global_product_lots_id',
+            'global_product_lot_id',
             $since,
             $cursors['lots'],
             $limit
@@ -230,16 +246,58 @@ class TGS_Hub_Pull_Schema_Handler {
         $data['cursor_lot_next'] = $lot_result['next_cursor'];
         $data['has_more_lots'] = $lot_result['has_more'];
 
+        // 6. Lấy nhà cung cấp
+        $supplier_result = self::fetch_table_batch(
+            'wp_global_supplier',
+            'supplier_id',
+            $since,
+            $cursors['suppliers'],
+            $limit
+        );
+        $data['suppliers'] = $supplier_result['data'];
+        $data['cursor_suppliers_next'] = $supplier_result['next_cursor'];
+        $data['has_more_suppliers'] = $supplier_result['has_more'];
+
+        // 7. Lấy chính sách mua hàng
+        $purchase_policy_result = self::fetch_table_batch(
+            'wp_global_purchase_policy',
+            'purchase_policy_id',
+            $since,
+            $cursors['purchase_policies'],
+            $limit
+        );
+        $data['purchase_policies'] = $purchase_policy_result['data'];
+        $data['cursor_purchase_policies_next'] = $purchase_policy_result['next_cursor'];
+        $data['has_more_purchase_policies'] = $purchase_policy_result['has_more'];
+
+        // 8. Lấy chi tiết chính sách mua hàng
+        $purchase_policy_items_result = self::fetch_table_batch(
+            'wp_global_purchase_policy_item',
+            'pp_item_id',
+            $since,
+            $cursors['purchase_policy_items'],
+            $limit
+        );
+        $data['purchase_policy_items'] = $purchase_policy_items_result['data'];
+        $data['cursor_purchase_policy_items_next'] = $purchase_policy_items_result['next_cursor'];
+        $data['has_more_purchase_policy_items'] = $purchase_policy_items_result['has_more'];
+
         // Thống kê
         $data['summary'] = array(
             'batch_categories' => count($data['categories']),
             'batch_products' => count($data['products']),
             'batch_policies' => count($data['selling_policies']),
+            'batch_policy_items' => count($data['selling_policy_items']),
             'batch_lots' => count($data['product_lots']),
+            'batch_suppliers' => count($data['suppliers']),
+            'batch_purchase_policies' => count($data['purchase_policies']),
+            'batch_purchase_policy_items' => count($data['purchase_policy_items']),
             'since' => $since,
             'is_incremental' => !empty($since),
             'has_more' => $cat_result['has_more'] || $product_result['has_more'] ||
-                          $policy_result['has_more'] || $lot_result['has_more'],
+                          $policy_result['has_more'] || $policy_items_result['has_more'] ||
+                          $lot_result['has_more'] || $supplier_result['has_more'] ||
+                          $purchase_policy_result['has_more'] || $purchase_policy_items_result['has_more'],
         );
 
         return $data;
